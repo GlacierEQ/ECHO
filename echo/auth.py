@@ -19,13 +19,17 @@ class AuthorityContext:
     timestamp: int
 
 
-def canonical_authority_message(actor: str, scope: str, timestamp: str, nonce: str) -> bytes:
-    return f"{actor}\n{scope}\n{timestamp}\n{nonce}".encode("utf-8")
+def canonical_authority_message(
+    actor: str, scope: str, timestamp: str, nonce: str
+) -> bytes:
+    return f"{actor}\n{scope}\n{timestamp}\n{nonce}".encode()
 
 
-def sign_authority(secret: str, actor: str, scope: str, timestamp: str, nonce: str) -> str:
+def sign_authority(
+    secret: str, actor: str, scope: str, timestamp: str, nonce: str
+) -> str:
     return hmac.new(
-        secret.encode("utf-8"),
+        secret.encode(),
         canonical_authority_message(actor, scope, timestamp, nonce),
         hashlib.sha256,
     ).hexdigest()
@@ -61,7 +65,17 @@ def require_authority(
     )
 
 
+def granted_scopes(authority: AuthorityContext) -> set[str]:
+    return {item.strip() for item in authority.scope.split(",") if item.strip()}
+
+
+def require_any_scope(authority: AuthorityContext, *required: str) -> None:
+    scopes = granted_scopes(authority)
+    if "echo:*" in scopes or any(scope in scopes for scope in required):
+        return
+    joined = " or ".join(required)
+    raise HTTPException(403, f"AKOS authority scope required: {joined}")
+
+
 def require_scope(authority: AuthorityContext, required: str) -> None:
-    scopes = {item.strip() for item in authority.scope.split(",") if item.strip()}
-    if "echo:*" not in scopes and required not in scopes:
-        raise HTTPException(403, f"AKOS authority scope required: {required}")
+    require_any_scope(authority, required)
