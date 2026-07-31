@@ -8,7 +8,8 @@ import uuid
 from fastapi.testclient import TestClient
 
 from echo.auth import sign_authority
-from echo.main import app
+from echo.db import init_db
+from echo.main import create_app
 
 
 def headers(secret: str, scope: str, actor: str = "akos:integration") -> dict[str, str]:
@@ -27,10 +28,11 @@ def headers(secret: str, scope: str, actor: str = "akos:integration") -> dict[st
 
 def test_full_authority_execution_receipt_loop(monkeypatch, tmp_path):
     secret = "integration-secret"
+    db_path = tmp_path / "integration.db"
     monkeypatch.setenv("ECHO_AKOS_SHARED_SECRET", secret)
-    monkeypatch.setenv("ECHO_DB", str(tmp_path / "integration.db"))
+    client_app = create_app(init_db(db_path))
 
-    with TestClient(app) as client:
+    with TestClient(client_app) as client:
         assert client.get("/health").status_code == 200
         assert client.get("/stats").status_code == 422
         assert client.get(
@@ -49,7 +51,7 @@ def test_full_authority_execution_receipt_loop(monkeypatch, tmp_path):
                 ],
             },
         )
-        assert conversation.status_code == 201
+        assert conversation.status_code == 200
 
         enqueue = client.post(
             "/jobs",
@@ -61,7 +63,7 @@ def test_full_authority_execution_receipt_loop(monkeypatch, tmp_path):
                 "max_attempts": 2,
             },
         )
-        assert enqueue.status_code == 201
+        assert enqueue.status_code == 200
         job_id = enqueue.json()["id"]
 
         executed = client.post(
@@ -100,10 +102,11 @@ def test_full_authority_execution_receipt_loop(monkeypatch, tmp_path):
 
 def test_trust_endpoint_requires_verify_scope(monkeypatch, tmp_path):
     secret = "integration-secret"
+    db_path = tmp_path / "scope.db"
     monkeypatch.setenv("ECHO_AKOS_SHARED_SECRET", secret)
-    monkeypatch.setenv("ECHO_DB", str(tmp_path / "scope.db"))
+    client_app = create_app(init_db(db_path))
 
-    with TestClient(app) as client:
+    with TestClient(client_app) as client:
         enqueue = client.post(
             "/jobs",
             headers=headers(secret, "echo:execute"),
