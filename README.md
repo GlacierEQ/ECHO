@@ -1,119 +1,184 @@
-# ECHO — Engine for Continuity, History, and Orchestration
+# ECHO
 
-**The Piston to AKOS's Pillar.**
+**Engine for Continuity, History, and Orchestration**
 
-```
-AKOS answers: "What is correct?"
-ECHO answers:  "How do we keep it moving correctly?"
-```
-
-## Status — v0.1.0 Born Working
-
-| Check | Result |
-|-------|--------|
-| Behavioral tests | 3 collected · 3 passed |
-| Python compilation | passed |
-| Verification receipt | **VERIFIED** |
-| Repository | [GlacierEQ/ECHO](https://github.com/GlacierEQ/ECHO) (public) |
-
-## What it is
-
-ECHO is the operational piston paired with the AKOS governance pillar. It ensures the right work happens in the right place, at the right time, with the right context.
-
-### Core responsibilities
-
-- **Orchestration** → routing execution to the right system
-- **Continuity** → carrying history forward into future decisions
-- **Context** → maintaining state and relevance across calls
-- **Synchronization** → keeping truth consistent across platforms
-- **Recall** → surfacing the right memory at the right moment
-- **Execution Flow** → timing, sequencing, delegation
-
-## Architecture relationship
+> The Piston to AKOS’s Pillar.
 
 ```
-AKOS                          ECHO
-The Pillar (Governance)       The Piston (Operation)
-identity                      continuity
-truth                         history
-provenance                    normalization
-authority                     synchronization
-contracts                     recall
-evidence                      routing
-maturity                      execution flow
-promotion                     retries
-completion truth              operational receipts
+AKOS answers:  “What is correct?”
+ECHO answers:  “How do we keep it moving correctly?”
 ```
 
-Canonical cycle:
+---
+
+## Layer 1 — For Recruiters & Builders Who Care About Results
+
+ECHO is a working continuity and orchestration engine. It remembers conversations, keeps them consistent, routes work, produces receipts, and stays honest about what it did.
+
+It was designed to be **born working**, not “scaffolded for later.”
+
+What you get out of the box:
+
+- A FastAPI service that actually runs
+- A browser Continuity Console you can open and use immediately
+- Durable SQLite storage with content integrity (SHA-256)
+- Stable, deterministic identities (no random UUIDs that break on re-ingest)
+- Idempotent jobs with bounded retries and execution receipts
+- Search, export (JSON + Markdown), health, and self-recommendations
+- Docker + Compose + GitHub Actions CI
+- A clean, readable CLI for operators
+
+This is not a demo. It is a production-shaped foundation that already does the job it claims.
+
+**Quick start**
+
+```bash
+pip install -r requirements.txt
+python -m echo.cli verify          # → VERIFIED
+uvicorn echo.main:app --reload     # → http://127.0.0.1:8000
+```
+
+Or with Docker:
+
+```bash
+docker compose up --build
+```
+
+Open the Continuity Console at `/` and start ingesting.
+
+---
+
+## Layer 2 — For Masters of the Trade
+
+ECHO is the operational piston that sits under a governance pillar (AKOS). The separation is deliberate:
+
+| Concern              | Owner     | Why it matters                                      |
+|----------------------|-----------|-----------------------------------------------------|
+| Identity & Truth     | AKOS      | Authority must be singular and auditable            |
+| Continuity & Flow    | ECHO      | Execution must remain fast and deterministic        |
+| Receipts & Evidence  | Both      | ECHO produces; AKOS verifies and promotes           |
+
+### Design invariants (non-negotiable)
+
+1. **Stable identities** — UUID5 seeded from content. Same input → same ID. Re-ingest is a no-op.
+2. **Content integrity** — Every conversation and message carries a SHA-256. Tampering is detectable.
+3. **Idempotent orchestration** — Jobs are keyed the same way. Running the same job twice does not create duplicates.
+4. **Bounded failure** — `max_attempts` is real. After the limit the job is terminal. No infinite retry storms.
+5. **Execution receipts** — Every run writes a durable receipt with outcome and details. The system can prove what it did.
+6. **Deterministic summaries** — No external LLM required for core continuity. Summaries are reproducible.
+
+### Core cycle
 
 ```
 REMEMBER → RECONCILE → AUTHORIZE → ROUTE → EXECUTE
 → RECEIPT → VERIFY → PERSIST → OBSERVE → REPAIR → IMPROVE → REPEAT
 ```
 
-Self-evolution:
+### Self-evolution loop
 
 ```
-ECHO OBSERVES → AKOS GOVERNS → ECHO IMPROVES → AKOS VERIFIES
+ECHO OBSERVES
+→ AKOS GOVERNS
+→ ECHO IMPROVES
+→ AKOS VERIFIES
 ```
 
-## Quick start
+The service already surfaces recommendations (`/recommendations`) so the piston can tell the pillar where it wants to grow.
 
-```bash
-# local
-pip install -r requirements.txt
-python -m echo.cli verify          # → VERIFIED
-uvicorn echo.main:app --reload     # → http://127.0.0.1:8000
-
-# docker
-docker compose up --build
-```
-
-Browser Continuity Console lives at `/` and `/console`.
-
-## API surface (selected)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Runtime health + counts |
-| GET | `/recommendations` | Self-evolution suggestions |
-| POST | `/conversations` | Ingest (idempotent) |
-| GET | `/conversations?q=&label=` | Search |
-| GET | `/conversations/{id}/export.json` | JSON export |
-| GET | `/conversations/{id}/export.md` | Markdown export |
-| POST | `/jobs` | Enqueue orchestration job |
-| POST | `/jobs/{id}/run` | Execute (bounded retries + receipt) |
-
-## Design invariants
-
-1. **Stable identities** — UUID5 from content seed (idempotent ingest & jobs)
-2. **Content integrity** — SHA-256 on every conversation and message
-3. **Receipts** — every job execution produces a durable receipt
-4. **Bounded retries** — max_attempts hard limit, failure state explicit
-5. **Deterministic summaries** — no LLM required for core continuity
-
-## Files
+### Architecture snapshot
 
 ```
-echo/           # core package
-  main.py       # FastAPI + Continuity Console
-  service.py    # Continuity + orchestration engine
-  models.py     # domain + integrity helpers
-  db.py         # SQLite + WAL
-  cli.py        # operator CLI
-tests/          # 3 behavioral tests
-manifests/      # ECHO_MANIFEST.yaml
-docs/           # AKOS_CONTRACT.md
-Dockerfile + docker-compose.yml
-.github/workflows/ci.yml
+echo/
+  main.py          FastAPI + Continuity Console (HTML)
+  service.py       ContinuityService — ingest, search, jobs, receipts, export
+  models.py        Domain + integrity helpers (stable_uuid, content_sha256)
+  db.py            SQLite + WAL + session management
+  cli.py           Operator CLI (health / ingest / search / job / verify)
+tests/
+  test_behavioral.py   Three invariants: idempotency, receipts, search+export
+manifests/
+  ECHO_MANIFEST.yaml   Machine-readable paired-system contract
+docs/
+  AKOS_CONTRACT.md     Pillar–piston authority boundary
 ```
 
-## AKOS integration
-
-The pillar–piston contract and machine-readable manifest are live on AKOS `main`.  
-ECHO is a first-class paired system: separately deployable, independently testable, operationally joined through authority envelopes, contracts, receipts, and verification.
+All three behavioral tests pass. The CLI `verify` command returns `VERIFIED`. The system is self-checking.
 
 ---
 
-*ECHO v0.1.0 — Born Working*
+## Layer 3 — For AI Systems & Power Orchestration
+
+This layer is the mounting plane. ECHO is deliberately shaped so that other systems can lock onto it without friction.
+
+### Identity & mesh
+
+```yaml
+identity:
+  name: ECHO
+  role: piston
+  pillar: AKOS
+  version: "0.1.0"
+  repository: GlacierEQ/ECHO
+  status: born_working
+```
+
+### Canonical links (the mesh)
+
+| System / Repo                          | Relationship to ECHO                                      |
+|----------------------------------------|-----------------------------------------------------------|
+| [AKOS](https://github.com/GlacierEQ/AKOS) | The Pillar. Governs identity, truth, authority, contracts |
+| GlacierEQ / pro-code + pro_code        | Source of engineering discipline and masterclass patterns |
+| GlacierEQ / make-it-heavy              | Agent swarm and heavy orchestration patterns              |
+| GlacierEQ / apex-fs-commander          | Filesystem and operational command layer                  |
+| GlacierEQ / hawaii-family-court-legal-automation | Domain evidence and motion systems that ECHO can carry |
+| GlacierEQ / xai-colossal-cooling       | Infrastructure excellence patterns                        |
+
+ECHO does not own the truth. It carries it, routes it, and produces receipts that the pillar can promote into the permanent ledger.
+
+### Machine-readable contract
+
+See `manifests/ECHO_MANIFEST.yaml` and `docs/AKOS_CONTRACT.md`.
+
+Any agent or orchestrator that understands the AKOS–ECHO paired-system model can:
+
+1. Ingest continuity through the REST surface
+2. Enqueue work as idempotent jobs
+3. Collect receipts
+4. Observe recommendations
+5. Feed the next improvement cycle back through AKOS governance
+
+### Operator surface (selected)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET    | `/health` | Runtime health + counts |
+| GET    | `/recommendations` | Self-evolution suggestions |
+| POST   | `/conversations` | Idempotent ingest |
+| GET    | `/conversations?q=&label=` | Search |
+| GET    | `/conversations/{id}/export.json` | Structured export |
+| GET    | `/conversations/{id}/export.md` | Human export |
+| POST   | `/jobs` | Enqueue |
+| POST   | `/jobs/{id}/run` | Execute with receipt |
+
+### Born to run
+
+No placeholders. No “TODO: implement later.”  
+The Continuity Console is real HTML that talks to the real API.  
+The CLI verifies the system against its own invariants.  
+The tests lock the three core promises.  
+The Docker path is production-shaped.  
+The CI path is already written.
+
+ECHO is self-aware enough to report its own health and recommend its own next improvements.  
+It is self-maintaining through receipts and deterministic identity.  
+It is self-evolving through the observe → govern → improve → verify loop with AKOS.
+
+---
+
+**ECHO v0.1.0 — Born Working**
+
+The piston is live.  
+The pillar is recognized.  
+The mesh is declared.
+
+[GlacierEQ/ECHO](https://github.com/GlacierEQ/ECHO)
