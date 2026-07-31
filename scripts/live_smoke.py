@@ -79,7 +79,7 @@ def run(base_url: str, secret: str, actor: str) -> dict[str, Any]:
                 ],
             },
         )
-        results.append(check(conversation, 201, "authorized conversation ingest"))
+        results.append(check(conversation, 200, "authorized conversation ingest"))
 
         execute_headers = signed_headers(secret, actor, "echo:execute")
         idempotency_key = f"smoke-job-{uuid.uuid4()}"
@@ -93,8 +93,8 @@ def run(base_url: str, secret: str, actor: str) -> dict[str, Any]:
                 "max_attempts": 2,
             },
         )
-        results.append(check(job, 201, "authorized job enqueue"))
-        job_id = job.json().get("id") if job.status_code == 201 else None
+        results.append(check(job, 200, "authorized job enqueue"))
+        job_id = job.json().get("id") if job.status_code == 200 else None
 
         if job_id:
             run_response = client.post(
