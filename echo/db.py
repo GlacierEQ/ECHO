@@ -1,4 +1,4 @@
-"""SQLite durable persistence layer for ECHO."""
+"""SQLite persistence layer for ECHO."""
 
 from __future__ import annotations
 
@@ -11,11 +11,28 @@ from sqlalchemy.orm import sessionmaker
 
 from echo.models import Base
 
-DEFAULT_DB = Path(os.environ.get("ECHO_DB", "echo_data/echo.db"))
+LOCAL_DEFAULT_DB = Path("echo_data/echo.db")
+VERCEL_DEFAULT_DB = Path("/tmp/echo.db")
+
+
+def resolve_db_path(db_path: Path | str | None = None) -> Path:
+    """Resolve a writable database path for the current runtime.
+
+    Explicit arguments and ``ECHO_DB`` always win. Vercel Functions expose a
+    read-only application filesystem, so their safe SQLite fallback is /tmp.
+    """
+    if db_path is not None:
+        return Path(db_path)
+    configured = os.environ.get("ECHO_DB", "").strip()
+    if configured:
+        return Path(configured)
+    if os.environ.get("VERCEL"):
+        return VERCEL_DEFAULT_DB
+    return LOCAL_DEFAULT_DB
 
 
 def get_engine(db_path: Path | str | None = None):
-    path = Path(db_path or DEFAULT_DB)
+    path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     url = f"sqlite:///{path}"
     engine = create_engine(
