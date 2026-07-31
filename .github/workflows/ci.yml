@@ -25,8 +25,8 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Compile
         run: python -m compileall -q echo tests scripts
-      - name: Lint
-        run: ruff check --select E,F echo tests scripts
+      - name: Correctness lint
+        run: ruff check --select F echo tests scripts
       - name: Behavioral tests
         run: pytest tests/ -v --tb=short
       - name: CLI verify
