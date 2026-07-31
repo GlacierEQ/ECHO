@@ -26,7 +26,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q echo tests scripts
       - name: Lint
-        run: ruff check echo tests scripts
+        run: ruff check --select E,F echo tests scripts
       - name: Behavioral tests
         run: pytest tests/ -v --tb=short
       - name: CLI verify
