@@ -9,7 +9,8 @@ services:
       - echo_data:/app/echo_data
     environment:
       ECHO_DB: /app/echo_data/echo.db
-      ECHO_AKOS_SHARED_SECRET: ${ECHO_AKOS_SHARED_SECRET:?ECHO_AKOS_SHARED_SECRET must be set}
+      # Optional. Direct-access mode does not require a shared secret.
+      ECHO_AKOS_SHARED_SECRET: ${ECHO_AKOS_SHARED_SECRET:-}
       ECHO_AUTH_MAX_SKEW_SECONDS: ${ECHO_AUTH_MAX_SKEW_SECONDS:-300}
     restart: unless-stopped
     healthcheck:
