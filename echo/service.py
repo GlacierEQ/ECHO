@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Optional
 
@@ -24,7 +23,6 @@ from echo.models import (
     stable_uuid,
     utcnow,
 )
-
 
 SUPPORTED_JOBS = {"echo.ping", "echo.summarize", "echo.integrity.verify"}
 
@@ -51,11 +49,9 @@ class ContinuityService:
         canonical = self._canonical_conversation(data)
         content_hash = content_sha256(canonical_json(canonical))
         existing = self.session.get(ConversationORM, conv_id)
-
         if existing and existing.content_hash == content_hash:
             existing.integrity_status = "verified"
             return self._to_out(existing)
-
         if existing:
             self.session.query(MessageORM).filter(
                 MessageORM.conversation_id == conv_id
@@ -85,7 +81,6 @@ class ContinuityService:
                 message_count=len(data.messages),
             )
             self.session.add(conv)
-
         for sequence, message in enumerate(data.messages):
             message_payload = message.model_dump(mode="json")
             self.session.add(
@@ -214,7 +209,6 @@ class ContinuityService:
             self._write_receipt(job, "failure", {"reason": "max_attempts"})
             self.session.flush()
             return self._job_out(job)
-
         job.status = "running"
         job.attempts += 1
         self.session.flush()
