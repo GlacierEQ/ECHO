@@ -3,21 +3,39 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.engine import Engine
 
 from echo import __version__
 from echo.db import get_session, init_db
 from echo.models import ConversationIn, JobIn, JobORM
+from echo.security import (
+    AuthContext,
+    auth_dependency,
+    auth_runtime_status,
+    get_auth_settings,
+    provenance,
+)
 from echo.service import ContinuityService
 from echo.trust import trust_loop_report
 
 ENGINE: Engine | None = None
-DIRECT_ACTOR = "direct-api"
-DIRECT_SCOPE = "echo:*"
+AuthRead = Annotated[AuthContext, Depends(auth_dependency("echo:read"))]
+AuthWrite = Annotated[
+    AuthContext,
+    Depends(auth_dependency("echo:write", write_operation=True)),
+]
+AuthVerify = Annotated[
+    AuthContext,
+    Depends(auth_dependency("echo:verify", write_operation=True)),
+]
+AuthExecute = Annotated[
+    AuthContext,
+    Depends(auth_dependency("echo:execute", write_operation=True)),
+]
 
 
 @asynccontextmanager
@@ -28,14 +46,19 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_IMPORT_AUTH_SETTINGS = get_auth_settings()
+_DOCS_DISABLED = _IMPORT_AUTH_SETTINGS.mode == "enforce-all"
 app = FastAPI(
     title="ECHO",
     description=(
         "Engine for Continuity, History, and Orchestration — "
-        "direct-access continuity service"
+        "staged OIDC continuity service"
     ),
     version=__version__,
     lifespan=lifespan,
+    docs_url=None if _DOCS_DISABLED else "/docs",
+    redoc_url=None,
+    openapi_url=None if _DOCS_DISABLED else "/openapi.json",
 )
 
 
@@ -50,28 +73,30 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 @app.get("/health")
 def health():
     with get_session(ENGINE) as session:
-        return ContinuityService(session).health()
+        status = ContinuityService(session).health()
+    return {**status, "authentication": auth_runtime_status()}
 
 
 @app.get("/stats")
-def stats():
+def stats(_auth: AuthRead):
     return health()
 
 
 @app.get("/recommendations")
-def recommendations():
+def recommendations(_auth: AuthRead):
     with get_session(ENGINE) as session:
         return {"recommendations": ContinuityService(session).recommendations()}
 
 
 @app.post("/conversations")
-def create_conversation(body: ConversationIn):
+def create_conversation(body: ConversationIn, _auth: AuthWrite):
     with get_session(ENGINE) as session:
         return ContinuityService(session).ingest_conversation(body)
 
 
 @app.get("/conversations")
 def list_conversations(
+    _auth: AuthRead,
     q: str = Query("", description="Search titles, summaries, and message content"),
     label: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
@@ -82,7 +107,7 @@ def list_conversations(
 
 
 @app.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str):
+def get_conversation(conv_id: str, _auth: AuthRead):
     with get_session(ENGINE) as session:
         out = ContinuityService(session).get_conversation(conv_id)
         if not out:
@@ -91,7 +116,7 @@ def get_conversation(conv_id: str):
 
 
 @app.get("/conversations/{conv_id}/messages")
-def get_messages(conv_id: str):
+def get_messages(conv_id: str, _auth: AuthRead):
     with get_session(ENGINE) as session:
         service = ContinuityService(session)
         if not service.get_conversation(conv_id):
@@ -108,17 +133,17 @@ def _integrity_result(conv_id: str):
 
 
 @app.post("/conversations/{conv_id}/integrity")
-def verify_integrity(conv_id: str):
+def verify_integrity(conv_id: str, _auth: AuthVerify):
     return _integrity_result(conv_id)
 
 
 @app.get("/conversations/{conv_id}/integrity")
-def verify_integrity_compat(conv_id: str):
+def verify_integrity_compat(conv_id: str, _auth: AuthVerify):
     return _integrity_result(conv_id)
 
 
 @app.get("/conversations/{conv_id}/export.json")
-def export_json(conv_id: str):
+def export_json(conv_id: str, _auth: AuthRead):
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).export_json(conv_id)
@@ -127,7 +152,7 @@ def export_json(conv_id: str):
 
 
 @app.get("/conversations/{conv_id}/export.md", response_class=PlainTextResponse)
-def export_markdown(conv_id: str):
+def export_markdown(conv_id: str, _auth: AuthRead):
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).export_markdown(conv_id)
@@ -148,13 +173,14 @@ def _canonical_job(body: JobIn) -> JobIn:
 
 
 @app.post("/jobs")
-def enqueue_job(body: JobIn):
+def enqueue_job(body: JobIn, auth: AuthExecute):
+    actor, scope = provenance(auth)
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).enqueue_job(
                 _canonical_job(body),
-                actor=DIRECT_ACTOR,
-                scope=DIRECT_SCOPE,
+                actor=actor,
+                scope=scope,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -169,17 +195,17 @@ def _execute_job(job_id: str):
 
 
 @app.post("/jobs/{job_id}/run")
-def run_job(job_id: str):
+def run_job(job_id: str, _auth: AuthExecute):
     return _execute_job(job_id)
 
 
 @app.post("/jobs/{job_id}/execute")
-def execute_job_compat(job_id: str):
+def execute_job_compat(job_id: str, _auth: AuthExecute):
     return _execute_job(job_id)
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, _auth: AuthRead):
     with get_session(ENGINE) as session:
         job = session.get(JobORM, job_id)
         if not job:
@@ -188,7 +214,7 @@ def get_job(job_id: str):
 
 
 @app.get("/jobs/{job_id}/trust")
-def verify_job_trust(job_id: str):
+def verify_job_trust(job_id: str, _auth: AuthRead):
     """Verify execution state and receipt-chain integrity."""
     with get_session(ENGINE) as session:
         try:
@@ -216,15 +242,15 @@ code{color:#58a6ff}
 <h1>ECHO</h1>
 <p>Engine for Continuity, History, and Orchestration</p>
 <div class="card">
-<h2>Direct access active</h2>
-<p>The API no longer requires an AKOS shared secret, signature, or authority
-headers. Requests can call continuity, export, verification, and job endpoints
-directly.</p>
+<h2>Staged OIDC security</h2>
+<p>ECHO verifies RS256 bearer tokens against public signing keys. Shadow mode
+observes authentication without blocking traffic; enforcement is enabled only
+after production validation.</p>
 </div>
 <div class="card">
-<h2>Audit provenance</h2>
-<p>Jobs are recorded with actor <code>direct-api</code> and scope
-<code>echo:*</code> so receipt history remains attributable without a key.</p>
+<h2>No application signing secret</h2>
+<p>ECHO never stores the identity provider's private signing key. Validated
+subjects and scopes are attached to job receipts for audit provenance.</p>
 </div>
 <div class="card">
 <h2>API documentation</h2>
