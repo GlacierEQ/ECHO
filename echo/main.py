@@ -1,28 +1,23 @@
-"""ECHO FastAPI application — governed continuity console and REST API."""
+"""ECHO FastAPI application — continuity console and REST API."""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.engine import Engine
 
 from echo import __version__
-from echo.auth import (
-    AuthorityContext,
-    require_any_scope,
-    require_authority,
-    require_scope,
-)
 from echo.db import get_session, init_db
 from echo.models import ConversationIn, JobIn, JobORM
 from echo.service import ContinuityService
 from echo.trust import trust_loop_report
 
 ENGINE: Engine | None = None
-Authority = Annotated[AuthorityContext, Depends(require_authority)]
+DIRECT_ACTOR = "direct-api"
+DIRECT_SCOPE = "echo:*"
 
 
 @asynccontextmanager
@@ -37,7 +32,7 @@ app = FastAPI(
     title="ECHO",
     description=(
         "Engine for Continuity, History, and Orchestration — "
-        "the governed piston to AKOS"
+        "direct-access continuity service"
     ),
     version=__version__,
     lifespan=lifespan,
@@ -59,41 +54,35 @@ def health():
 
 
 @app.get("/stats")
-def stats(authority: Authority):
-    require_scope(authority, "echo:read")
+def stats():
     return health()
 
 
 @app.get("/recommendations")
-def recommendations(authority: Authority):
-    require_scope(authority, "echo:read")
+def recommendations():
     with get_session(ENGINE) as session:
         return {"recommendations": ContinuityService(session).recommendations()}
 
 
 @app.post("/conversations")
-def create_conversation(body: ConversationIn, authority: Authority):
-    require_scope(authority, "echo:write")
+def create_conversation(body: ConversationIn):
     with get_session(ENGINE) as session:
         return ContinuityService(session).ingest_conversation(body)
 
 
 @app.get("/conversations")
 def list_conversations(
-    authority: Authority,
     q: str = Query("", description="Search titles, summaries, and message content"),
     label: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
 ):
-    require_scope(authority, "echo:read")
     with get_session(ENGINE) as session:
         results = ContinuityService(session).search(q=q, label=label, limit=limit)
         return {"conversations": results, "count": len(results)}
 
 
 @app.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str, authority: Authority):
-    require_scope(authority, "echo:read")
+def get_conversation(conv_id: str):
     with get_session(ENGINE) as session:
         out = ContinuityService(session).get_conversation(conv_id)
         if not out:
@@ -102,8 +91,7 @@ def get_conversation(conv_id: str, authority: Authority):
 
 
 @app.get("/conversations/{conv_id}/messages")
-def get_messages(conv_id: str, authority: Authority):
-    require_scope(authority, "echo:read")
+def get_messages(conv_id: str):
     with get_session(ENGINE) as session:
         service = ContinuityService(session)
         if not service.get_conversation(conv_id):
@@ -120,20 +108,17 @@ def _integrity_result(conv_id: str):
 
 
 @app.post("/conversations/{conv_id}/integrity")
-def verify_integrity(conv_id: str, authority: Authority):
-    require_scope(authority, "echo:verify")
+def verify_integrity(conv_id: str):
     return _integrity_result(conv_id)
 
 
 @app.get("/conversations/{conv_id}/integrity")
-def verify_integrity_compat(conv_id: str, authority: Authority):
-    require_any_scope(authority, "echo:verify", "echo:read")
+def verify_integrity_compat(conv_id: str):
     return _integrity_result(conv_id)
 
 
 @app.get("/conversations/{conv_id}/export.json")
-def export_json(conv_id: str, authority: Authority):
-    require_scope(authority, "echo:export")
+def export_json(conv_id: str):
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).export_json(conv_id)
@@ -142,8 +127,7 @@ def export_json(conv_id: str, authority: Authority):
 
 
 @app.get("/conversations/{conv_id}/export.md", response_class=PlainTextResponse)
-def export_markdown(conv_id: str, authority: Authority):
-    require_scope(authority, "echo:export")
+def export_markdown(conv_id: str):
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).export_markdown(conv_id)
@@ -164,14 +148,13 @@ def _canonical_job(body: JobIn) -> JobIn:
 
 
 @app.post("/jobs")
-def enqueue_job(body: JobIn, authority: Authority):
-    require_any_scope(authority, "echo:execute", "echo:jobs:write")
+def enqueue_job(body: JobIn):
     with get_session(ENGINE) as session:
         try:
             return ContinuityService(session).enqueue_job(
                 _canonical_job(body),
-                actor=authority.actor,
-                scope=authority.scope,
+                actor=DIRECT_ACTOR,
+                scope=DIRECT_SCOPE,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -186,20 +169,17 @@ def _execute_job(job_id: str):
 
 
 @app.post("/jobs/{job_id}/run")
-def run_job(job_id: str, authority: Authority):
-    require_any_scope(authority, "echo:execute", "echo:jobs:execute")
+def run_job(job_id: str):
     return _execute_job(job_id)
 
 
 @app.post("/jobs/{job_id}/execute")
-def execute_job_compat(job_id: str, authority: Authority):
-    require_any_scope(authority, "echo:execute", "echo:jobs:execute")
+def execute_job_compat(job_id: str):
     return _execute_job(job_id)
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str, authority: Authority):
-    require_any_scope(authority, "echo:read", "echo:jobs:read")
+def get_job(job_id: str):
     with get_session(ENGINE) as session:
         job = session.get(JobORM, job_id)
         if not job:
@@ -208,9 +188,8 @@ def get_job(job_id: str, authority: Authority):
 
 
 @app.get("/jobs/{job_id}/trust")
-def verify_job_trust(job_id: str, authority: Authority):
-    """Verify authority attribution, terminal execution, and receipt chain."""
-    require_any_scope(authority, "echo:verify", "echo:jobs:read")
+def verify_job_trust(job_id: str):
+    """Verify execution state and receipt-chain integrity."""
     with get_session(ENGINE) as session:
         try:
             return trust_loop_report(session, job_id)
@@ -223,7 +202,7 @@ CONSOLE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ECHO Governed Continuity Console</title>
+<title>ECHO Continuity Console</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#e6edf3;margin:0}
 .shell{max-width:900px;margin:auto;padding:32px}
@@ -237,14 +216,15 @@ code{color:#58a6ff}
 <h1>ECHO</h1>
 <p>Engine for Continuity, History, and Orchestration</p>
 <div class="card">
-<h2>Governed piston active</h2>
-<p>Health remains public. Continuity reads, writes, exports, verification,
-and execution require a signed AKOS authority envelope.</p>
+<h2>Direct access active</h2>
+<p>The API no longer requires an AKOS shared secret, signature, or authority
+headers. Requests can call continuity, export, verification, and job endpoints
+directly.</p>
 </div>
 <div class="card">
-<h2>Required headers</h2>
-<code>X-AKOS-Actor · X-AKOS-Scope · X-AKOS-Timestamp · X-AKOS-Nonce ·
-X-AKOS-Signature</code>
+<h2>Audit provenance</h2>
+<p>Jobs are recorded with actor <code>direct-api</code> and scope
+<code>echo:*</code> so receipt history remains attributable without a key.</p>
 </div>
 <div class="card">
 <h2>API documentation</h2>
