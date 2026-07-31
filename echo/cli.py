@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
+from pathlib import Path
 
-from echo.db import get_engine, get_session, init_db
+from echo.db import get_session, init_db
 from echo.models import ConversationIn, JobIn, MessageIn
 from echo.service import ContinuityService
 
@@ -15,69 +17,94 @@ def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(prog="echo", description="ECHO Continuity CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_health = sub.add_parser("health", help="Runtime health + stats")
-    p_ingest = sub.add_parser("ingest", help="Ingest a simple conversation")
-    p_ingest.add_argument("--title", required=True)
-    p_ingest.add_argument("--content", required=True, help="role: content (or plain text)")
-    p_search = sub.add_parser("search", help="Search conversations")
-    p_search.add_argument("query", nargs="?", default="")
-    p_job = sub.add_parser("job", help="Enqueue + run a job")
-    p_job.add_argument("--type", required=True)
-    p_job.add_argument("--payload", default="{}")
-    p_verify = sub.add_parser("verify", help="Run verification suite")
+    sub.add_parser("health", help="Runtime health + stats")
+    ingest = sub.add_parser("ingest", help="Ingest a simple conversation")
+    ingest.add_argument("--source", default="manual")
+    ingest.add_argument("--external-id", required=True)
+    ingest.add_argument("--title", required=True)
+    ingest.add_argument("--content", required=True, help="role: content (or plain text)")
+    search = sub.add_parser("search", help="Search conversations")
+    search.add_argument("query", nargs="?", default="")
+    job = sub.add_parser("job", help="Enqueue + run a supported job")
+    job.add_argument("--type", required=True)
+    job.add_argument("--payload", default="{}")
+    job.add_argument("--idempotency-key", required=True)
+    sub.add_parser("verify", help="Run isolated verification pulse")
 
     args = parser.parse_args(argv)
+    if args.cmd == "verify":
+        with tempfile.TemporaryDirectory(prefix="echo-verify-") as directory:
+            return _verify(Path(directory) / "verify.db")
+
     engine = init_db()
-
     with get_session(engine) as session:
-        svc = ContinuityService(session)
-
+        service = ContinuityService(session)
         if args.cmd == "health":
-            print(json.dumps(svc.health(), indent=2))
+            print(json.dumps(service.health(), indent=2))
             return 0
-
         if args.cmd == "ingest":
-            role, _, content = args.content.partition(":")
-            if not content:
+            role, separator, content = args.content.partition(":")
+            if not separator:
                 role, content = "user", role
-            body = ConversationIn(
-                title=args.title,
-                messages=[MessageIn(role=role.strip(), content=content.strip())],
+            out = service.ingest_conversation(
+                ConversationIn(
+                    source=args.source,
+                    external_id=args.external_id,
+                    title=args.title,
+                    messages=[MessageIn(role=role.strip(), content=content.strip())],
+                )
             )
-            out = svc.ingest_conversation(body)
             print(json.dumps(out.model_dump(mode="json"), indent=2))
             return 0
-
         if args.cmd == "search":
-            results = svc.search(q=args.query)
-            print(json.dumps([r.model_dump(mode="json") for r in results], indent=2))
+            results = service.search(q=args.query)
+            print(json.dumps([item.model_dump(mode="json") for item in results], indent=2))
             return 0
-
         if args.cmd == "job":
-            payload = json.loads(args.payload)
-            job = svc.enqueue_job(JobIn(job_type=args.type, payload=payload))
-            result = svc.run_job(job.id)
+            queued = service.enqueue_job(
+                JobIn(
+                    job_type=args.type,
+                    payload=json.loads(args.payload),
+                    idempotency_key=args.idempotency_key,
+                ),
+                actor="echo:cli",
+                scope="echo:execute",
+            )
+            result = service.run_job(queued.id)
             print(json.dumps(result.model_dump(mode="json"), indent=2))
             return 0
+    return 1
 
-        if args.cmd == "verify":
-            # lightweight self-check
-            h = svc.health()
-            assert h["status"] == "ok"
-            body = ConversationIn(
+
+def _verify(path: Path) -> int:
+    engine = init_db(path)
+    with get_session(engine) as session:
+        service = ContinuityService(session)
+        conversation = service.ingest_conversation(
+            ConversationIn(
+                source="echo.verify",
+                external_id="verification-pulse",
                 title="verify-seed",
                 messages=[MessageIn(role="system", content="verification pulse")],
             )
-            conv = svc.ingest_conversation(body)
-            assert conv.content_hash
-            job = svc.enqueue_job(JobIn(job_type="echo.ping", payload={"verify": True}))
-            ran = svc.run_job(job.id)
-            assert ran.status == "succeeded"
-            print("VERIFIED")
-            print(json.dumps({"health": h, "conversation_id": conv.id, "job_id": ran.id}, indent=2))
-            return 0
-
-    return 1
+        )
+        integrity = service.verify_integrity(conversation.id)
+        job = service.enqueue_job(
+            JobIn(
+                job_type="echo.ping",
+                payload={"verify": True},
+                idempotency_key="verify-ping",
+            ),
+            actor="akos:verify",
+            scope="echo:execute",
+        )
+        ran = service.run_job(job.id)
+        assert service.health()["status"] == "ok"
+        assert integrity.valid
+        assert ran.status == "succeeded"
+        print("VERIFIED")
+        print(json.dumps({"conversation_id": conversation.id, "job_id": ran.id}, indent=2))
+        return 0
 
 
 if __name__ == "__main__":

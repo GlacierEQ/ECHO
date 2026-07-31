@@ -1,8 +1,7 @@
-"""Core continuity + orchestration service."""
+"""Governed continuity and orchestration service."""
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Optional
 
@@ -13,15 +12,19 @@ from echo.models import (
     ConversationIn,
     ConversationORM,
     ConversationOut,
+    IntegrityResult,
     JobIn,
     JobORM,
     JobOut,
     MessageORM,
     ReceiptORM,
+    canonical_json,
     content_sha256,
     stable_uuid,
     utcnow,
 )
+
+SUPPORTED_JOBS = {"echo.ping", "echo.summarize", "echo.integrity.verify"}
 
 
 class ContinuityService:
@@ -29,48 +32,68 @@ class ContinuityService:
         self.session = session
         self._start = time.monotonic()
 
+    @staticmethod
+    def _canonical_conversation(data: ConversationIn) -> dict[str, Any]:
+        return {
+            "source": data.source,
+            "external_id": data.external_id,
+            "title": data.title,
+            "participants": data.participants,
+            "labels": data.labels,
+            "metadata": data.metadata,
+            "messages": [m.model_dump(mode="json") for m in data.messages],
+        }
+
     def ingest_conversation(self, data: ConversationIn) -> ConversationOut:
-        seed = data.title + "|" + (data.messages[0].content if data.messages else "")
-        conv_id = stable_uuid(f"echo:conv:{seed}")
-
+        conv_id = stable_uuid(f"echo:conv:{data.source}:{data.external_id}")
+        canonical = self._canonical_conversation(data)
+        content_hash = content_sha256(canonical_json(canonical))
         existing = self.session.get(ConversationORM, conv_id)
-        if existing:
+        if existing and existing.content_hash == content_hash:
+            existing.integrity_status = "verified"
             return self._to_out(existing)
-
-        messages_payload = [
-            {"role": m.role, "content": m.content, "metadata": m.metadata}
-            for m in data.messages
-        ]
-        full_content = json.dumps({"title": data.title, "messages": messages_payload}, sort_keys=True)
-        c_hash = content_sha256(full_content)
-        summary = self._deterministic_summary(data.title, data.messages)
-
-        conv = ConversationORM(
-            id=conv_id,
-            title=data.title,
-            participants=data.participants,
-            labels=data.labels,
-            metadata_=data.metadata,
-            summary=summary,
-            content_hash=c_hash,
-            message_count=len(data.messages),
-        )
-        self.session.add(conv)
-
-        for idx, msg in enumerate(data.messages):
-            msg_id = stable_uuid(f"echo:msg:{conv_id}:{idx}:{msg.content[:64]}")
+        if existing:
+            self.session.query(MessageORM).filter(
+                MessageORM.conversation_id == conv_id
+            ).delete(synchronize_session=False)
+            conv = existing
+            conv.title = data.title
+            conv.participants = data.participants
+            conv.labels = data.labels
+            conv.metadata_ = data.metadata
+            conv.summary = self._deterministic_summary(data.title, data.messages)
+            conv.content_hash = content_hash
+            conv.integrity_status = "verified"
+            conv.message_count = len(data.messages)
+            conv.updated_at = utcnow()
+        else:
+            conv = ConversationORM(
+                id=conv_id,
+                source=data.source,
+                external_id=data.external_id,
+                title=data.title,
+                participants=data.participants,
+                labels=data.labels,
+                metadata_=data.metadata,
+                summary=self._deterministic_summary(data.title, data.messages),
+                content_hash=content_hash,
+                integrity_status="verified",
+                message_count=len(data.messages),
+            )
+            self.session.add(conv)
+        for sequence, message in enumerate(data.messages):
+            message_payload = message.model_dump(mode="json")
             self.session.add(
                 MessageORM(
-                    id=msg_id,
+                    id=stable_uuid(f"echo:msg:{conv_id}:{sequence}"),
                     conversation_id=conv_id,
-                    role=msg.role,
-                    content=msg.content,
-                    content_hash=content_sha256(msg.content),
-                    sequence=idx,
-                    metadata_=msg.metadata,
+                    role=message.role,
+                    content=message.content,
+                    content_hash=content_sha256(canonical_json(message_payload)),
+                    sequence=sequence,
+                    metadata_=message.metadata,
                 )
             )
-
         self.session.flush()
         return self._to_out(conv)
 
@@ -79,50 +102,95 @@ class ContinuityService:
         return self._to_out(conv) if conv else None
 
     def search(self, q: str = "", label: Optional[str] = None, limit: int = 50) -> list[ConversationOut]:
-        stmt = select(ConversationORM)
+        stmt = select(ConversationORM).distinct()
         if q:
             like = f"%{q}%"
+            stmt = stmt.outerjoin(MessageORM, MessageORM.conversation_id == ConversationORM.id)
             stmt = stmt.where(
                 or_(
                     ConversationORM.title.ilike(like),
                     ConversationORM.summary.ilike(like),
+                    MessageORM.content.ilike(like),
                 )
             )
         stmt = stmt.order_by(ConversationORM.updated_at.desc()).limit(limit * 3 if label else limit)
-        rows = self.session.scalars(stmt).all()
-        results = [self._to_out(r) for r in rows]
+        results = [self._to_out(row) for row in self.session.scalars(stmt).unique().all()]
         if label:
-            results = [r for r in results if label in (r.labels or [])]
+            results = [item for item in results if label in item.labels]
         return results[:limit]
 
-    def list_messages(self, conv_id: str) -> list[dict]:
-        stmt = select(MessageORM).where(MessageORM.conversation_id == conv_id).order_by(MessageORM.sequence)
+    def list_messages(self, conv_id: str) -> list[dict[str, Any]]:
+        stmt = select(MessageORM).where(
+            MessageORM.conversation_id == conv_id
+        ).order_by(MessageORM.sequence)
         return [
             {
-                "id": m.id,
-                "role": m.role,
-                "content": m.content,
-                "content_hash": m.content_hash,
-                "sequence": m.sequence,
-                "metadata": m.metadata_ or {},
-                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "id": row.id,
+                "role": row.role,
+                "content": row.content,
+                "content_hash": row.content_hash,
+                "sequence": row.sequence,
+                "metadata": row.metadata_ or {},
+                "created_at": row.created_at.isoformat(),
             }
-            for m in self.session.scalars(stmt).all()
+            for row in self.session.scalars(stmt).all()
         ]
 
-    def enqueue_job(self, data: JobIn) -> JobOut:
-        payload_str = json.dumps(data.payload, sort_keys=True)
-        job_id = stable_uuid(f"echo:job:{data.job_type}:{payload_str}")
-        existing = self.session.get(JobORM, job_id)
+    def verify_integrity(self, conv_id: str) -> IntegrityResult:
+        conv = self.session.get(ConversationORM, conv_id)
+        if not conv:
+            raise ValueError("conversation not found")
+        messages = self.list_messages(conv_id)
+        failures: list[str] = []
+        canonical_messages = []
+        for message in messages:
+            payload = {
+                "role": message["role"],
+                "content": message["content"],
+                "metadata": message["metadata"],
+            }
+            actual_message_hash = content_sha256(canonical_json(payload))
+            if actual_message_hash != message["content_hash"]:
+                failures.append(message["id"])
+            canonical_messages.append(payload)
+        canonical = {
+            "source": conv.source,
+            "external_id": conv.external_id,
+            "title": conv.title,
+            "participants": conv.participants or [],
+            "labels": conv.labels or [],
+            "metadata": conv.metadata_ or {},
+            "messages": canonical_messages,
+        }
+        actual = content_sha256(canonical_json(canonical))
+        valid = actual == conv.content_hash and not failures
+        conv.integrity_status = "verified" if valid else "quarantined"
+        self.session.flush()
+        return IntegrityResult(
+            conversation_id=conv_id,
+            valid=valid,
+            expected_hash=conv.content_hash,
+            actual_hash=actual,
+            message_failures=failures,
+        )
+
+    def enqueue_job(self, data: JobIn, actor: str = "", scope: str = "") -> JobOut:
+        if data.job_type not in SUPPORTED_JOBS:
+            raise ValueError(f"unsupported capability: {data.job_type}")
+        existing = self.session.scalar(
+            select(JobORM).where(JobORM.idempotency_key == data.idempotency_key)
+        )
         if existing:
             return self._job_out(existing)
-
         job = JobORM(
-            id=job_id,
+            id=stable_uuid(f"echo:job:{data.idempotency_key}"),
             job_type=data.job_type,
             payload=data.payload,
+            idempotency_key=data.idempotency_key,
             status="pending",
             max_attempts=data.max_attempts,
+            authority_actor=actor,
+            authority_scope=scope,
         )
         self.session.add(job)
         self.session.flush()
@@ -131,160 +199,150 @@ class ContinuityService:
     def run_job(self, job_id: str) -> JobOut:
         job = self.session.get(JobORM, job_id)
         if not job:
-            raise ValueError(f"Job {job_id} not found")
-
+            raise ValueError(f"job {job_id} not found")
         if job.status == "succeeded":
             return self._job_out(job)
-
         if job.attempts >= job.max_attempts:
             job.status = "failed"
             job.last_error = "max attempts exceeded"
             job.finished_at = utcnow()
-            self._write_receipt(job, "execute", "failure", {"reason": "max_attempts"})
+            self._write_receipt(job, "failure", {"reason": "max_attempts"})
             self.session.flush()
             return self._job_out(job)
-
         job.status = "running"
         job.attempts += 1
         self.session.flush()
-
         try:
             result = self._dispatch(job)
             job.status = "succeeded"
             job.receipt = result
             job.finished_at = utcnow()
-            self._write_receipt(job, "execute", "success", result)
+            self._write_receipt(job, "success", result)
         except Exception as exc:
             job.status = "retrying" if job.attempts < job.max_attempts else "failed"
             job.last_error = str(exc)
             if job.status == "failed":
                 job.finished_at = utcnow()
-            self._write_receipt(job, "execute", "failure", {"error": str(exc)})
+            self._write_receipt(job, "failure", {"error": str(exc)})
         self.session.flush()
         return self._job_out(job)
 
     def _dispatch(self, job: JobORM) -> dict[str, Any]:
-        t = job.job_type
-        if t == "echo.ping":
+        if job.job_type == "echo.ping":
             return {"pong": True, "payload": job.payload}
-        if t == "echo.summarize":
-            conv_id = job.payload.get("conversation_id")
-            conv = self.session.get(ConversationORM, conv_id) if conv_id else None
-            return {"summary": conv.summary if conv else "not found"}
-        if t == "echo.export":
-            return {"exported": True, "conversation_id": job.payload.get("conversation_id"), "format": job.payload.get("format", "json")}
-        return {"acknowledged": True, "job_type": t, "payload": job.payload}
+        if job.job_type == "echo.summarize":
+            conv_id = str(job.payload.get("conversation_id", ""))
+            conv = self.session.get(ConversationORM, conv_id)
+            if not conv:
+                raise ValueError("conversation not found")
+            return {"conversation_id": conv_id, "summary": conv.summary}
+        if job.job_type == "echo.integrity.verify":
+            conv_id = str(job.payload.get("conversation_id", ""))
+            return self.verify_integrity(conv_id).model_dump(mode="json")
+        raise ValueError(f"unsupported capability: {job.job_type}")
 
-    def _write_receipt(self, job: JobORM, action: str, outcome: str, details: dict):
-        rid = stable_uuid(f"echo:receipt:{job.id}:{action}:{job.attempts}")
-        rec = ReceiptORM(
-            id=rid,
-            job_id=job.id,
-            action=action,
-            outcome=outcome,
-            details=details,
-            content_hash=content_sha256(json.dumps(details, sort_keys=True)),
+    def _write_receipt(self, job: JobORM, outcome: str, details: dict[str, Any]) -> None:
+        previous = self.session.scalar(
+            select(ReceiptORM).where(ReceiptORM.job_id == job.id).order_by(ReceiptORM.attempt.desc())
         )
-        self.session.add(rec)
+        previous_hash = previous.content_hash if previous else ""
+        payload = {
+            "job_id": job.id,
+            "attempt": job.attempts,
+            "outcome": outcome,
+            "details": details,
+            "previous_hash": previous_hash,
+        }
+        receipt_hash = content_sha256(canonical_json(payload))
+        self.session.add(
+            ReceiptORM(
+                id=stable_uuid(f"echo:receipt:{job.id}:{job.attempts}"),
+                job_id=job.id,
+                attempt=job.attempts,
+                action="execute",
+                outcome=outcome,
+                details=details,
+                previous_hash=previous_hash,
+                content_hash=receipt_hash,
+            )
+        )
 
     def health(self) -> dict[str, Any]:
-        convs = self.session.scalar(select(func.count()).select_from(ConversationORM)) or 0
-        msgs = self.session.scalar(select(func.count()).select_from(MessageORM)) or 0
-        jobs = self.session.scalar(select(func.count()).select_from(JobORM)) or 0
-        receipts = self.session.scalar(select(func.count()).select_from(ReceiptORM)) or 0
+        count = lambda model: self.session.scalar(select(func.count()).select_from(model)) or 0
         return {
             "status": "ok",
-            "version": "0.1.0",
-            "conversations": convs,
-            "messages": msgs,
-            "jobs": jobs,
-            "receipts": receipts,
+            "version": "0.2.0-hardening",
+            "conversations": count(ConversationORM),
+            "messages": count(MessageORM),
+            "jobs": count(JobORM),
+            "receipts": count(ReceiptORM),
             "uptime_seconds": round(time.monotonic() - self._start, 2),
             "pillar": "AKOS",
             "role": "piston",
+            "authority_mode": "required_for_privileged_routes",
         }
 
     def recommendations(self) -> list[dict[str, str]]:
-        stats = self.health()
-        recs = []
-        if stats["conversations"] == 0:
-            recs.append({"area": "ingestion", "action": "Ingest first conversation to seed continuity"})
-        if stats["jobs"] > 0 and stats["receipts"] == 0:
-            recs.append({"area": "receipts", "action": "Ensure every job produces an execution receipt"})
-        recs.append({"area": "observability", "action": "Wire Prometheus metrics endpoint"})
-        recs.append({"area": "authority", "action": "Require AKOS authority envelope on privileged routes"})
-        return recs
+        return [
+            {"area": "workers", "action": "Add transactional leases and stale-worker recovery"},
+            {"area": "providers", "action": "Bind ChatGPT, Claude, Gemini, and Grok adapters behind capability contracts"},
+            {"area": "observability", "action": "Publish queue, latency, integrity, and retry metrics"},
+        ]
 
-    def export_json(self, conv_id: str) -> dict:
+    def export_json(self, conv_id: str) -> dict[str, Any]:
         conv = self.get_conversation(conv_id)
         if not conv:
             raise ValueError("conversation not found")
-        messages = self.list_messages(conv_id)
         return {
-            "id": conv.id,
-            "title": conv.title,
-            "participants": conv.participants,
-            "labels": conv.labels,
-            "metadata": conv.metadata,
-            "summary": conv.summary,
-            "content_hash": conv.content_hash,
-            "messages": messages,
+            **conv.model_dump(mode="json"),
+            "messages": self.list_messages(conv_id),
             "exported_at": utcnow().isoformat(),
         }
 
     def export_markdown(self, conv_id: str) -> str:
         data = self.export_json(conv_id)
-        lines = [
-            f"# {data['title']}",
-            "",
-            f"**ID:** `{data['id']}`  ",
-            f"**Hash:** `{data['content_hash']}`  ",
-            f"**Participants:** {', '.join(data['participants']) or '—'}  ",
-            f"**Labels:** {', '.join(data['labels']) or '—'}  ",
-            "",
-            "## Summary",
-            data["summary"] or "_none_",
-            "",
-            "## Messages",
-            "",
-        ]
-        for m in data["messages"]:
-            lines.append(f"### [{m['sequence']}] {m['role']}")
-            lines.append("")
-            lines.append(m["content"])
-            lines.append("")
+        lines = [f"# {data['title']}", "", f"**Source:** `{data['source']}`", f"**External ID:** `{data['external_id']}`", f"**Hash:** `{data['content_hash']}`", "", "## Summary", data["summary"], "", "## Messages", ""]
+        for message in data["messages"]:
+            lines.extend([f"### [{message['sequence']}] {message['role']}", "", message["content"], ""])
         return "\n".join(lines)
 
-    def _deterministic_summary(self, title: str, messages: list) -> str:
-        if not messages:
-            return f"Empty conversation: {title}"
-        first = messages[0].content[:120].replace("\n", " ")
-        last = messages[-1].content[:80].replace("\n", " ") if len(messages) > 1 else ""
-        return f"{title} — {len(messages)} msgs. Opens: {first}… Ends: {last}…"
+    @staticmethod
+    def _deterministic_summary(title: str, messages: list[Any]) -> str:
+        first = messages[0].content[:160].replace("\n", " ")
+        last = messages[-1].content[:120].replace("\n", " ")
+        return f"{title} — {len(messages)} messages. Opens: {first}… Ends: {last}…"
 
-    def _to_out(self, conv: ConversationORM) -> ConversationOut:
+    @staticmethod
+    def _to_out(conv: ConversationORM) -> ConversationOut:
         return ConversationOut(
             id=conv.id,
+            source=conv.source,
+            external_id=conv.external_id,
             title=conv.title,
             participants=conv.participants or [],
             labels=conv.labels or [],
             metadata=conv.metadata_ or {},
-            summary=conv.summary or "",
+            summary=conv.summary,
             content_hash=conv.content_hash,
-            message_count=conv.message_count or 0,
+            integrity_status=conv.integrity_status,
+            message_count=conv.message_count,
             created_at=conv.created_at,
             updated_at=conv.updated_at,
         )
 
-    def _job_out(self, job: JobORM) -> JobOut:
+    @staticmethod
+    def _job_out(job: JobORM) -> JobOut:
         return JobOut(
             id=job.id,
             job_type=job.job_type,
+            idempotency_key=job.idempotency_key,
             status=job.status,
             attempts=job.attempts,
             max_attempts=job.max_attempts,
             last_error=job.last_error or "",
             receipt=job.receipt or {},
+            authority_actor=job.authority_actor or "",
+            authority_scope=job.authority_scope or "",
             created_at=job.created_at,
             updated_at=job.updated_at,
             finished_at=job.finished_at,
