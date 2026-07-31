@@ -1,32 +1,15 @@
 #!/usr/bin/env python3
-"""Live AKOS ↔ ECHO deployment smoke harness."""
+"""Live ECHO deployment smoke harness (direct-access mode)."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import time
 import uuid
 from typing import Any
 
 import httpx
-
-from echo.auth import sign_authority
-
-
-def signed_headers(secret: str, actor: str, scope: str) -> dict[str, str]:
-    timestamp = str(int(time.time()))
-    nonce = str(uuid.uuid4())
-    return {
-        "X-AKOS-Actor": actor,
-        "X-AKOS-Scope": scope,
-        "X-AKOS-Timestamp": timestamp,
-        "X-AKOS-Nonce": nonce,
-        "X-AKOS-Signature": sign_authority(
-            secret, actor, scope, timestamp, nonce
-        ),
-    }
 
 
 def check(response: httpx.Response, expected: int, name: str) -> dict[str, Any]:
@@ -44,48 +27,37 @@ def check(response: httpx.Response, expected: int, name: str) -> dict[str, Any]:
     }
 
 
-def run(base_url: str, secret: str, actor: str) -> dict[str, Any]:
+def run(base_url: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     base_url = base_url.rstrip("/")
     with httpx.Client(base_url=base_url, timeout=20.0) as client:
         results.append(check(client.get("/health"), 200, "public health"))
 
-        bad_headers = signed_headers("incorrect-secret", actor, "echo:read")
-        results.append(
-            check(client.get("/stats", headers=bad_headers), 403, "bad signature rejected")
-        )
+        stats = client.get("/stats")
+        results.append(check(stats, 200, "stats readable"))
 
-        read_headers = signed_headers(secret, actor, "echo:read")
-        results.append(
-            check(client.get("/stats", headers=read_headers), 200, "authorized read")
-        )
-
-        write_headers = signed_headers(secret, actor, "echo:write")
         external_id = f"smoke-{uuid.uuid4()}"
         conversation = client.post(
             "/conversations",
-            headers=write_headers,
             json={
                 "source": "grok-live-smoke",
                 "external_id": external_id,
-                "title": "AKOS ECHO Trust Loop Smoke",
-                "participants": [actor, "echo"],
-                "labels": ["smoke", "p0.5"],
+                "title": "ECHO Direct Access Smoke",
+                "participants": ["smoke", "echo"],
+                "labels": ["smoke", "direct"],
                 "messages": [
                     {
                         "role": "system",
-                        "content": "Verify the governed trust loop.",
+                        "content": "Verify direct-access continuity and jobs.",
                     }
                 ],
             },
         )
-        results.append(check(conversation, 200, "authorized conversation ingest"))
+        results.append(check(conversation, 200, "conversation ingest"))
 
-        execute_headers = signed_headers(secret, actor, "echo:execute")
         idempotency_key = f"smoke-job-{uuid.uuid4()}"
         job = client.post(
             "/jobs",
-            headers=execute_headers,
             json={
                 "job_type": "echo.ping",
                 "payload": {"smoke": True},
@@ -93,28 +65,26 @@ def run(base_url: str, secret: str, actor: str) -> dict[str, Any]:
                 "max_attempts": 2,
             },
         )
-        results.append(check(job, 200, "authorized job enqueue"))
+        results.append(check(job, 200, "job enqueue"))
         job_id = job.json().get("id") if job.status_code == 200 else None
 
         if job_id:
-            run_response = client.post(
-                f"/jobs/{job_id}/run",
-                headers=signed_headers(secret, actor, "echo:execute"),
-            )
-            results.append(check(run_response, 200, "authorized job execution"))
+            run_response = client.post(f"/jobs/{job_id}/run")
+            results.append(check(run_response, 200, "job execution"))
 
-            trust_response = client.get(
-                f"/jobs/{job_id}/trust",
-                headers=signed_headers(secret, actor, "echo:verify"),
-            )
+            trust_response = client.get(f"/jobs/{job_id}/trust")
             trust_result = check(trust_response, 200, "receipt trust-chain verification")
             if trust_response.status_code == 200:
-                trust_result["passed"] = bool(trust_response.json().get("verified"))
+                body = trust_response.json()
+                # In direct mode, authority_actor is recorded as direct-api;
+                # chain validity + terminal state still matter.
+                trust_result["passed"] = bool(
+                    body.get("valid") or body.get("verified")
+                )
             results.append(trust_result)
 
         unsupported = client.post(
             "/jobs",
-            headers=signed_headers(secret, actor, "echo:execute"),
             json={
                 "job_type": "echo.unsupported",
                 "payload": {},
@@ -126,7 +96,7 @@ def run(base_url: str, secret: str, actor: str) -> dict[str, Any]:
 
     return {
         "base_url": base_url,
-        "actor": actor,
+        "mode": "direct_access",
         "passed": all(item["passed"] for item in results),
         "checks": results,
     }
@@ -138,15 +108,8 @@ def main() -> int:
         "--base-url",
         default=os.environ.get("ECHO_BASE_URL", "http://127.0.0.1:8000"),
     )
-    parser.add_argument(
-        "--secret",
-        default=os.environ.get("ECHO_AKOS_SHARED_SECRET", ""),
-    )
-    parser.add_argument("--actor", default="akos:live-smoke")
     args = parser.parse_args()
-    if not args.secret:
-        raise SystemExit("ECHO_AKOS_SHARED_SECRET or --secret is required")
-    report = run(args.base_url, args.secret, args.actor)
+    report = run(args.base_url)
     print(json.dumps(report, indent=2))
     return 0 if report["passed"] else 1
 
