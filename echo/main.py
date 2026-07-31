@@ -13,6 +13,7 @@ from echo.auth import AuthorityContext, require_authority, require_scope
 from echo.db import get_session, init_db
 from echo.models import ConversationIn, JobIn, JobORM
 from echo.service import ContinuityService
+from echo.trust import trust_loop_report
 
 ENGINE = None
 Authority = Annotated[AuthorityContext, Depends(require_authority)]
@@ -27,7 +28,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ECHO",
-    description="Engine for Continuity, History, and Orchestration — the governed piston to AKOS",
+    description=(
+        "Engine for Continuity, History, and Orchestration — "
+        "the governed piston to AKOS"
+    ),
     version=__version__,
     lifespan=lifespan,
 )
@@ -153,15 +157,52 @@ def get_job(job_id: str, authority: Authority):
         return ContinuityService(session)._job_out(job)
 
 
+@app.get("/jobs/{job_id}/trust")
+def verify_job_trust(job_id: str, authority: Authority):
+    """Verify authority attribution, terminal execution, and receipt chain."""
+    require_scope(authority, "echo:verify")
+    with get_session(ENGINE) as session:
+        try:
+            return trust_loop_report(session, job_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+
 CONSOLE_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ECHO Governed Continuity Console</title><style>
-body{font-family:system-ui;background:#0d1117;color:#e6edf3;margin:0}.shell{max-width:900px;margin:auto;padding:32px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;margin:16px 0}code{color:#58a6ff}
-</style></head><body><div class="shell"><h1>ECHO</h1><p>Engine for Continuity, History, and Orchestration</p>
-<div class="card"><h2>Governed piston active</h2><p>Health remains public. Continuity reads, writes, exports, verification, and execution require a signed AKOS authority envelope.</p></div>
-<div class="card"><h2>Required headers</h2><code>X-AKOS-Actor · X-AKOS-Scope · X-AKOS-Timestamp · X-AKOS-Nonce · X-AKOS-Signature</code></div>
-<div class="card"><h2>API documentation</h2><p><a href="/docs" style="color:#58a6ff">OpenAPI console</a></p></div></div></body></html>"""
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECHO Governed Continuity Console</title>
+<style>
+body{font-family:system-ui;background:#0d1117;color:#e6edf3;margin:0}
+.shell{max-width:900px;margin:auto;padding:32px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;
+padding:20px;margin:16px 0}
+code{color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="shell">
+<h1>ECHO</h1>
+<p>Engine for Continuity, History, and Orchestration</p>
+<div class="card">
+<h2>Governed piston active</h2>
+<p>Health remains public. Continuity reads, writes, exports, verification,
+and execution require a signed AKOS authority envelope.</p>
+</div>
+<div class="card">
+<h2>Required headers</h2>
+<code>X-AKOS-Actor · X-AKOS-Scope · X-AKOS-Timestamp · X-AKOS-Nonce ·
+X-AKOS-Signature</code>
+</div>
+<div class="card">
+<h2>API documentation</h2>
+<p><a href="/docs" style="color:#58a6ff">OpenAPI console</a></p>
+</div>
+</div>
+</body>
+</html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
