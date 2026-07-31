@@ -15,7 +15,7 @@ from functools import lru_cache
 from typing import Annotated, Any, Callable
 
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWTError
 
@@ -65,7 +65,7 @@ def get_auth_settings() -> AuthSettings:
             else f"https://{auth0_domain}"
         )
     if issuer:
-        issuer = f"{issuer.rstrip('/')} /".replace(" /", "/")
+        issuer = f"{issuer.rstrip('/')}/"
 
     audience = (
         os.environ.get("ECHO_OIDC_AUDIENCE", "").strip()
@@ -132,9 +132,16 @@ def validate_authorization_header(authorization: str | None) -> AuthContext:
         return AuthContext(status="invalid", reason=exc.__class__.__name__)
 
 
-def _log_auth_event(context: AuthContext, required_scope: str, enforced: bool) -> None:
+def _log_auth_event(
+    request: Request,
+    context: AuthContext,
+    required_scope: str,
+    enforced: bool,
+) -> None:
     payload = {
         "event": "echo_auth",
+        "method": request.method,
+        "path": request.url.path,
         "mode": get_auth_settings().mode,
         "status": context.status,
         "subject": context.subject,
@@ -142,6 +149,7 @@ def _log_auth_event(context: AuthContext, required_scope: str, enforced: bool) -
         "required_scope": required_scope,
         "enforced": enforced,
         "reason": context.reason,
+        "request_id": request.headers.get("x-request-id", ""),
     }
     level = logging.WARNING if context.status == "invalid" else logging.INFO
     LOGGER.log(level, json.dumps(payload, sort_keys=True))
@@ -159,12 +167,13 @@ def auth_dependency(
     """Return a FastAPI dependency for staged authentication enforcement."""
 
     def dependency(
+        request: Request,
         authorization: Annotated[str | None, Header()] = None,
     ) -> AuthContext:
         settings = get_auth_settings()
         context = validate_authorization_header(authorization)
         enforce = _should_enforce(settings.mode, write_operation)
-        _log_auth_event(context, required_scope, enforce)
+        _log_auth_event(request, context, required_scope, enforce)
 
         if not enforce:
             return context
