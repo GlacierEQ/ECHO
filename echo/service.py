@@ -1,4 +1,4 @@
-"""Governed continuity and orchestration service."""
+"""Continuity and orchestration service."""
 
 from __future__ import annotations
 
@@ -271,7 +271,7 @@ class ContinuityService:
         count = lambda model: self.session.scalar(select(func.count()).select_from(model)) or 0
         return {
             "status": "ok",
-            "version": "0.2.0-hardening",
+            "version": "0.2.1-direct",
             "conversations": count(ConversationORM),
             "messages": count(MessageORM),
             "jobs": count(JobORM),
@@ -279,7 +279,7 @@ class ContinuityService:
             "uptime_seconds": round(time.monotonic() - self._start, 2),
             "pillar": "AKOS",
             "role": "piston",
-            "authority_mode": "required_for_privileged_routes",
+            "authority_mode": "direct_access",
         }
 
     def recommendations(self) -> list[dict[str, str]]:
