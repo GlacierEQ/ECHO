@@ -1,0 +1,83 @@
+# ECHO — Engine for Continuity, History, and Orchestration
+# Machine-readable paired-system runtime manifest
+# Version: 0.1.0
+
+identity:
+  name: ECHO
+  full_name: Engine for Continuity, History, and Orchestration
+  version: "0.1.0"
+  role: piston
+  pillar: AKOS
+  repository: GlacierEQ/ECHO
+  status: born_working
+
+relationship:
+  model: complementary_paired_system
+  description: |
+    AKOS answers: "What is correct?"
+    ECHO answers:  "How do we keep it moving correctly?"
+  akos_governs:
+    - identity
+    - truth
+    - provenance
+    - authority
+    - contracts
+    - evidence
+    - maturity
+    - promotion
+    - completion_truth
+  echo_operates:
+    - continuity
+    - history
+    - normalization
+    - synchronization
+    - recall
+    - routing
+    - execution_flow
+    - retries
+    - operational_receipts
+
+canonical_cycle:
+  - REMEMBER
+  - RECONCILE
+  - AUTHORIZE
+  - ROUTE
+  - EXECUTE
+  - RECEIPT
+  - VERIFY
+  - PERSIST
+  - OBSERVE
+  - REPAIR
+  - IMPROVE
+  - REPEAT
+
+self_evolution:
+  loop: |
+    ECHO OBSERVES
+    → AKOS GOVERNS
+    → ECHO IMPROVES
+    → AKOS VERIFIES
+
+capabilities:
+  - FastAPI REST service
+  - browser continuity console
+  - SQLite durable persistence
+  - stable UUID identities
+  - SHA-256 content integrity
+  - conversation ingestion and retrieval
+  - search (titles, participants, messages, labels)
+  - deterministic summaries
+  - JSON and Markdown export
+  - idempotent orchestration jobs
+  - bounded retries and failure states
+  - execution receipts
+  - runtime health and statistics
+  - self-evolution recommendations
+  - Docker + Compose
+  - CLI verification
+  - GitHub Actions CI
+
+verification:
+  behavioral_tests: 3
+  expected_result: VERIFIED
+  python_compilation: required
