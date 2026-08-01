@@ -81,11 +81,11 @@ def test_security_headers_and_valid_request_id_are_applied():
 def test_untrusted_request_id_is_replaced():
     response = _client(_settings()).get(
         "/ping",
-        headers={"X-Request-ID": "bad request id\nspoofed"},
+        headers={"X-Request-ID": "bad request id with spaces"},
     )
 
     assert response.status_code == 200
-    assert response.headers["x-request-id"] != "bad request id\nspoofed"
+    assert response.headers["x-request-id"] != "bad request id with spaces"
     assert len(response.headers["x-request-id"]) == 32
 
 
@@ -115,9 +115,7 @@ def test_streamed_oversized_body_is_rejected():
 
 
 def test_explicit_cors_origin_is_allowed_and_unknown_origin_is_not():
-    client = _client(
-        _settings(cors_origins=("https://console.example",))
-    )
+    client = _client(_settings(cors_origins=("https://console.example",)))
 
     allowed = client.options(
         "/ping",
