@@ -10,7 +10,12 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.engine import Engine
 
 from echo import __version__
-from echo.db import get_session, init_db
+from echo.db import database_runtime_status, get_session, init_db
+from echo.hardening import (
+    configure_hardening,
+    get_hardening_settings,
+    hardening_runtime_status,
+)
 from echo.models import ConversationIn, JobIn, JobORM
 from echo.security import (
     AuthContext,
@@ -47,7 +52,11 @@ async def lifespan(app: FastAPI):
 
 
 _IMPORT_AUTH_SETTINGS = get_auth_settings()
-_DOCS_DISABLED = _IMPORT_AUTH_SETTINGS.mode == "enforce-all"
+_HARDENING_SETTINGS = get_hardening_settings()
+_DOCS_DISABLED = (
+    _IMPORT_AUTH_SETTINGS.mode == "enforce-all"
+    or not _HARDENING_SETTINGS.docs_enabled
+)
 app = FastAPI(
     title="ECHO",
     description=(
@@ -60,6 +69,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if _DOCS_DISABLED else "/openapi.json",
 )
+configure_hardening(app, _HARDENING_SETTINGS)
 
 
 def create_app(engine: Engine | None = None) -> FastAPI:
@@ -72,18 +82,28 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
 @app.get("/health")
 def health():
-    with get_session(ENGINE) as session:
-        status = ContinuityService(session).health()
+    """Return a minimal public liveness response without record counts."""
     return {
-        **status,
+        "status": "ok",
+        "version": __version__,
+        "pillar": "AKOS",
+        "role": "piston",
         "authority_mode": "staged_oidc",
         "authentication": auth_runtime_status(),
+        "database": database_runtime_status(ENGINE),
+        "hardening": hardening_runtime_status(_HARDENING_SETTINGS),
     }
 
 
 @app.get("/stats")
 def stats(_auth: AuthRead):
-    return health()
+    """Return detailed service counts through the protected read path."""
+    with get_session(ENGINE) as session:
+        service_status = ContinuityService(session).health()
+    return {
+        **service_status,
+        **health(),
+    }
 
 
 @app.get("/recommendations")
@@ -227,6 +247,22 @@ def verify_job_trust(job_id: str, _auth: AuthRead):
             raise HTTPException(404, str(exc)) from exc
 
 
+_DOCS_CARD = (
+    """
+<div class="card">
+<h2>API documentation</h2>
+<p><a href="/docs" style="color:#58a6ff">OpenAPI console</a></p>
+</div>
+"""
+    if not _DOCS_DISABLED
+    else """
+<div class="card">
+<h2>API documentation</h2>
+<p>Interactive documentation is disabled in this environment.</p>
+</div>
+"""
+)
+
 CONSOLE_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -252,14 +288,16 @@ observes authentication without blocking traffic; enforcement is enabled only
 after production validation.</p>
 </div>
 <div class="card">
+<h2>Runtime hardening</h2>
+<p>Security headers, bounded request bodies, no-store responses, and explicit
+browser-origin controls are enabled.</p>
+</div>
+<div class="card">
 <h2>No application signing secret</h2>
 <p>ECHO never stores the identity provider's private signing key. Validated
 subjects and scopes are attached to job receipts for audit provenance.</p>
 </div>
-<div class="card">
-<h2>API documentation</h2>
-<p><a href="/docs" style="color:#58a6ff">OpenAPI console</a></p>
-</div>
+""" + _DOCS_CARD + """
 </div>
 </body>
 </html>"""
