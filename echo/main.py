@@ -96,8 +96,14 @@ def health():
 
 
 @app.get("/stats")
-def stats(_auth: AuthRead):
-    """Return detailed service counts through the protected read path."""
+def stats(auth: AuthRead):
+    """Return detailed counts only to a valid identity in production."""
+    if _HARDENING_SETTINGS.production and not auth.valid:
+        raise HTTPException(
+            status_code=401,
+            detail="valid bearer token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     with get_session(ENGINE) as session:
         service_status = ContinuityService(session).health()
     return {
