@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def test_production_app_hides_docs_and_record_counts(tmp_path):
+def test_production_app_hides_docs_counts_and_stats(tmp_path):
     environment = os.environ.copy()
     environment.update(
         {
@@ -30,10 +30,15 @@ from echo.main import app
 with TestClient(app) as client:
     health = client.get('/health')
     docs = client.get('/docs')
+    stats = client.get('/stats')
     print(json.dumps({
         'health_status': health.status_code,
         'health': health.json(),
         'docs_status': docs.status_code,
+        'stats_status': stats.status_code,
+        'stats_body': stats.json(),
+        'stats_authenticate': stats.headers.get('www-authenticate'),
+        'stats_security_header': stats.headers.get('x-content-type-options'),
         'headers': {
             'cache-control': health.headers.get('cache-control'),
             'content-security-policy': health.headers.get('content-security-policy'),
@@ -54,6 +59,10 @@ with TestClient(app) as client:
 
     assert result["health_status"] == 200
     assert result["docs_status"] == 404
+    assert result["stats_status"] == 401
+    assert result["stats_body"] == {"detail": "valid bearer token required"}
+    assert result["stats_authenticate"] == "Bearer"
+    assert result["stats_security_header"] == "nosniff"
     assert result["health"]["hardening"]["environment"] == "production"
     assert result["health"]["hardening"]["docs_enabled"] is False
     assert result["health"]["authentication"]["mode"] == "shadow"
