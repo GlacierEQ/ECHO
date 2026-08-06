@@ -1,54 +1,72 @@
-# Secret Management
+# Secret and Identity Management
 
-## ECHO_AKOS_SHARED_SECRET
+## Primary path (current main)
 
-This secret is the cryptographic anchor for AKOS→ECHO authority verification.
+ECHO's live authority mode is **staged OIDC**.
 
-### Generation
+- Default: `ECHO_AUTH_MODE=shadow`
+- Algorithm: RS256 against the identity provider JWKS
+- **No application shared secret is required for the primary path**
+- Runtime reports `shared_secret_required: false`
+
+Required only when you intentionally enforce OIDC:
+
+```text
+ECHO_OIDC_ISSUER=https://your-issuer.example/
+ECHO_OIDC_AUDIENCE=https://echo-api
+# or
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_AUDIENCE=https://echo-api
+ECHO_AUTH_MODE=shadow   # then enforce-writes, then enforce-all
+```
+
+Rollout sequence is documented in `docs/AUTH_ROLLOUT.md`.
+
+## Live verification (no shared secret)
+
+Canonical harness:
+
+```bash
+python scripts/live_smoke.py --base-url https://your-echo-host
+```
+
+Or trigger the reusable Action:
+
+```text
+.github/workflows/live-verify.yml
+```
+
+Set repository variable `ECHO_BASE_URL` once. No HMAC key is required.
+
+## Optional advanced: AKOS HMAC authority envelope
+
+`ECHO_AKOS_SHARED_SECRET` remains available for machine-to-machine AKOS
+authority envelopes (`echo/auth.py`). It is **not** required for:
+
+- process start
+- `/health`
+- staged OIDC operation
+- `scripts/live_smoke.py`
+- the live-verify GitHub Action
+
+If you use the optional envelope:
 
 ```bash
 openssl rand -hex 64
 ```
 
-Set the output as the environment variable in **both** AKOS and ECHO deployments.
+Place it only in the deployment environment (platform env / secret store).
+Never commit it. Never log it. Never pass it as a CLI argument visible in `ps`.
 
-### Setting in deployment environments
+Legacy script that still exercises the HMAC path:
 
-**Docker Compose** — add to `.env` (never commit `.env`):
-```
-ECHO_AKOS_SHARED_SECRET=<generated secret>
-```
-
-**Docker secrets** (preferred for production):
-```yaml
-services:
-  echo:
-    secrets:
-      - akos_shared_secret
-secrets:
-  akos_shared_secret:
-    file: ./secrets/akos_shared_secret.txt
+```bash
+# optional / advanced only
+ECHO_URL=... ECHO_AKOS_SHARED_SECRET=... bash scripts/smoke_test.sh
 ```
 
-**Railway / Render / Fly.io**: Set via the platform's environment variable UI or CLI.
+## What is never acceptable
 
-### Fail-closed behavior
-
-If `ECHO_AKOS_SHARED_SECRET` is absent at runtime, ECHO returns `503 Service Unavailable`
-on all authority-protected endpoints. It will **never** silently allow privileged access.
-
-### Rotation procedure
-
-1. Generate a new secret.
-2. Update AKOS deployment with new secret.
-3. Update ECHO deployment with new secret — do this as a coordinated deploy to avoid a
-   brief window of rejected requests (use a rolling deploy or maintenance window).
-4. Verify with smoke tests: `bash scripts/smoke_test.sh`
-5. Invalidate the old secret (remove from all systems).
-
-### What is never acceptable
-
-- Committing the secret to Git
-- Logging the secret
-- Passing the secret as a CLI argument (visible in `ps`)
-- Hardcoding the secret in any source file
+- Committing any secret to Git
+- Treating the optional HMAC key as a startup requirement
+- Leaving residual human secret placement as a blocker for basic live operation

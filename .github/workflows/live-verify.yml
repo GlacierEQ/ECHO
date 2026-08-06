@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: "Override live base URL (optional; defaults to repo variable/secret)"
+        description: "Override live base URL (optional; defaults to repo variable ECHO_BASE_URL)"
         required: false
         type: string
 
@@ -48,13 +48,13 @@ jobs:
           fi
           if [ -z "$BASE_URL" ]; then
             echo "::error::ECHO_BASE_URL is not configured."
-            echo "Set repository variable or secret ECHO_BASE_URL, or pass base_url on workflow_dispatch."
+            echo "Set repository variable ECHO_BASE_URL once, or pass base_url on workflow_dispatch."
+            echo "No shared HMAC secret is required for this live path."
             exit 1
           fi
           echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
-          echo "Using live base URL (value redacted from logs beyond presence check)"
 
-      - name: Run live smoke
+      - name: Run live smoke (no shared secret required)
         env:
           ECHO_BASE_URL: ${{ steps.config.outputs.base_url }}
         run: |

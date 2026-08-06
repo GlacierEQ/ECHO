@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Live smoke test for a deployed ECHO instance.
-# Usage: ECHO_URL=http://localhost:8000 ECHO_AKOS_SHARED_SECRET=mysecret bash scripts/smoke_test.sh
+# LEGACY optional HMAC authority envelope smoke.
+# Canonical live verification is: python scripts/live_smoke.py --base-url ...
+# and .github/workflows/live-verify.yml
+#
+# This script is retained only for advanced AKOS HMAC envelope testing.
+# It is NOT required for primary staged-OIDC operation.
 
 set -euo pipefail
 
@@ -24,7 +28,10 @@ check() {
 }
 
 if [[ -z "$SECRET" ]]; then
-  echo "ERROR: ECHO_AKOS_SHARED_SECRET is not set" && exit 1
+  echo "This is the LEGACY HMAC envelope smoke."
+  echo "Primary live path does not require ECHO_AKOS_SHARED_SECRET."
+  echo "Use: python scripts/live_smoke.py --base-url $ECHO_URL"
+  exit 2
 fi
 
 make_headers() {
@@ -36,11 +43,9 @@ make_headers() {
   printf '%s %s %s %s %s' "$ts" "$nonce" "$sig" "$actor" "$scope"
 }
 
-# 1. Health
 status=$(curl -s -o /dev/null -w "%{http_code}" "$ECHO_URL/health")
 check "Health endpoint responds 200" "200" "$status"
 
-# 2. Authorized request succeeds
 read -r ts nonce sig actor scope <<< "$(make_headers akos echo:read)"
 status=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "X-AKOS-Actor: $actor" -H "X-AKOS-Scope: $scope" \
@@ -49,7 +54,6 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
   "$ECHO_URL/conversations")
 check "Authorized request succeeds" "200" "$status"
 
-# 3. Invalid signature rejected
 status=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "X-AKOS-Actor: akos" -H "X-AKOS-Scope: echo:read" \
   -H "X-AKOS-Timestamp: $(date +%s)" -H "X-AKOS-Nonce: badfeed" \
@@ -57,7 +61,6 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
   "$ECHO_URL/conversations")
 check "Invalid signature rejected" "403" "$status"
 
-# 4. Missing scope rejected — request scope:read against a write-only endpoint
 read -r ts nonce sig actor scope <<< "$(make_headers akos echo:read)"
 status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   -H "Content-Type: application/json" \
@@ -68,7 +71,6 @@ status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   "$ECHO_URL/conversations")
 check "Missing write scope rejected" "403" "$status"
 
-# 5. Conversation ingestion succeeds
 read -r ts nonce sig actor scope <<< "$(make_headers akos echo:write)"
 response=$(curl -s -w "\n%{http_code}" -X POST \
   -H "Content-Type: application/json" \
@@ -82,7 +84,6 @@ status=$(echo "$response" | tail -1)
 check "Conversation ingestion succeeds" "200" "$status"
 CONV_ID=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 
-# 6. Integrity verification
 if [[ -n "$CONV_ID" ]]; then
   read -r ts nonce sig actor scope <<< "$(make_headers akos echo:read)"
   status=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -96,10 +97,9 @@ else
   ((FAIL+=1))
 fi
 
-# 7. Health stats present
 body=$(curl -s "$ECHO_URL/health")
-check "Health includes stats" "conversations" "$body"
+check "Health responds" "status" "$body"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-[[ $FAIL -eq 0 ]] && echo "SMOKE TEST: PASSED" && exit 0 || echo "SMOKE TEST: FAILED" && exit 1
+[[ $FAIL -eq 0 ]] && echo "LEGACY HMAC SMOKE: PASSED" && exit 0 || echo "LEGACY HMAC SMOKE: FAILED" && exit 1
