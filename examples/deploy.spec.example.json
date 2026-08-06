@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "retries": 2,
+  "backoff_seconds": 2.0,
+  "pipeline": {
+    "prepare": [],
+    "test": ["python -m compileall -q echo tests scripts ops"],
+    "build": [],
+    "deploy": ["echo 'replace with real deploy command'"],
+    "verify": [],
+    "rollback": ["echo 'replace with real rollback command'"]
+  },
+  "health": [
+    {
+      "url": "http://127.0.0.1:8000/health",
+      "expect_status": [200],
+      "attempts": 5,
+      "interval_seconds": 1
+    }
+  ]
+}

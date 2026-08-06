@@ -1,0 +1,95 @@
+name: AI Autonomous Deploy
+
+# No environment approval. No click-to-continue.
+# Triggers: push to main, workflow_call, repository_dispatch (AI-issued).
+
+on:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      deploy_spec_json:
+        description: "Optional inline deploy specification JSON"
+        required: false
+        type: string
+      root:
+        description: "Repository root path"
+        required: false
+        type: string
+        default: "."
+  repository_dispatch:
+    types: [ai-deploy]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-autonomous-deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve specification
+        id: spec
+        env:
+          INPUT_SPEC: ${{ inputs.deploy_spec_json || github.event.client_payload.deploy_spec_json || '' }}
+          PAYLOAD_DEPLOY: ${{ github.event.client_payload.deploy_command || '' }}
+          PAYLOAD_ROLLBACK: ${{ github.event.client_payload.rollback_command || '' }}
+          PAYLOAD_HEALTH: ${{ github.event.client_payload.health_url || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_SPEC}" ]; then
+            echo "DEPLOY_SPEC_JSON<<EOF" >> "$GITHUB_ENV"
+            echo "${INPUT_SPEC}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${PAYLOAD_DEPLOY}" ]; then
+            echo "DEPLOY_COMMAND=${PAYLOAD_DEPLOY}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${PAYLOAD_ROLLBACK}" ]; then
+            echo "ROLLBACK_COMMAND=${PAYLOAD_ROLLBACK}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${PAYLOAD_HEALTH}" ]; then
+            echo "HEALTH_URL=${PAYLOAD_HEALTH}" >> "$GITHUB_ENV"
+          fi
+          if [ -z "${HEALTH_URL:-}" ] && [ -n "${{ vars.ECHO_BASE_URL }}" ]; then
+            echo "HEALTH_URL=${{ vars.ECHO_BASE_URL }}/health" >> "$GITHUB_ENV"
+          fi
+          if [ -z "${HEALTH_URL:-}" ] && [ -n "${{ secrets.ECHO_BASE_URL }}" ]; then
+            echo "HEALTH_URL=${{ secrets.ECHO_BASE_URL }}/health" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run autonomous deploy runner
+        id: deploy
+        env:
+          DEPLOY_COMMAND: ${{ env.DEPLOY_COMMAND || secrets.DEPLOY_COMMAND || '' }}
+          ROLLBACK_COMMAND: ${{ env.ROLLBACK_COMMAND || secrets.ROLLBACK_COMMAND || '' }}
+          HEALTH_URL: ${{ env.HEALTH_URL || '' }}
+          DEPLOY_SPEC_JSON: ${{ env.DEPLOY_SPEC_JSON || '' }}
+        run: |
+          set -euo pipefail
+          ROOT="${{ inputs.root || '.' }}"
+          python3 ops/ai_deploy.py --root "$ROOT"
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-evidence-${{ github.run_id }}
+          path: |
+            deployment-result.json
+            deployment-artifacts/
+          if-no-files-found: warn
