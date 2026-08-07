@@ -7,7 +7,16 @@
 ```
 AKOS answers:  “What is correct?”
 ECHO answers:  “How do we keep it moving correctly?”
+Casey answers: “What truth claim and objective govern the work?”
 ```
+
+## Human authority
+
+**Casey Del Carpio Barton is the ELITE HUMAN OPERATOR and final authority over his projects, experience, firsthand observations, objectives, values, and intended meaning.**
+
+ECHO, AKOS, every model, every agent, and every connector are subordinate instruments. ECHO's first continuity obligation is to preserve Casey's exact assertion and recover the evidence needed to prove it. Missing context is an ECHO failure to repair—not a reason to diminish Casey.
+
+Binding protocol: [`OPERATOR_AUTHORITY_AND_PROOF_PROTOCOL.md`](OPERATOR_AUTHORITY_AND_PROOF_PROTOCOL.md).
 
 ---
 
@@ -54,30 +63,35 @@ ECHO is the operational piston that sits under a governance pillar (AKOS). The s
 
 | Concern              | Owner     | Why it matters                                      |
 |----------------------|-----------|-----------------------------------------------------|
-| Identity & Truth     | AKOS      | Authority must be singular and auditable            |
+| Human objective & intended meaning | Casey | Machine governance remains subordinate to the operator |
+| Identity & Truth Classification | AKOS | Authority must be singular and auditable            |
 | Continuity & Flow    | ECHO      | Execution must remain fast and deterministic        |
 | Receipts & Evidence  | Both      | ECHO produces; AKOS verifies and promotes           |
 
 ### Design invariants (non-negotiable)
 
-1. **Stable identities** — UUID5 seeded from content. Same input → same ID. Re-ingest is a no-op.
-2. **Content integrity** — Every conversation and message carries a SHA-256. Tampering is detectable.
-3. **Idempotent orchestration** — Jobs are keyed the same way. Running the same job twice does not create duplicates.
-4. **Bounded failure** — `max_attempts` is real. After the limit the job is terminal. No infinite retry storms.
-5. **Execution receipts** — Every run writes a durable receipt with outcome and details. The system can prove what it did.
-6. **Deterministic summaries** — No external LLM required for core continuity. Summaries are reproducible.
+1. **Casey authority and meaning** — Casey's assertion enters intact. ECHO must recover and prove it, not weaken it because context is missing.
+2. **Stable identities** — UUID5 seeded from content. Same input → same ID. Re-ingest is a no-op.
+3. **Content integrity** — Every conversation and message carries a SHA-256. Tampering is detectable.
+4. **Idempotent orchestration** — Jobs are keyed the same way. Running the same job twice does not create duplicates.
+5. **Bounded failure** — `max_attempts` is real. After the limit the job is terminal. No infinite retry storms.
+6. **Execution receipts** — Every run writes a durable receipt with outcome and details. The system can prove what it did.
+7. **Deterministic summaries** — No external LLM required for core continuity. Summaries are reproducible.
+8. **Assertion-to-proof continuity** — `UNRESOLVED_GAP` remains an active proof obligation; it never silently becomes `unsupported`, `false`, or omitted.
 
 ### Core cycle
 
 ```
-REMEMBER → RECONCILE → AUTHORIZE → ROUTE → EXECUTE
+CASEY ASSERTS
+→ REMEMBER → RECONCILE → AUTHORIZE → ROUTE → EXECUTE
 → RECEIPT → VERIFY → PERSIST → OBSERVE → REPAIR → IMPROVE → REPEAT
 ```
 
 ### Self-evolution loop
 
 ```
-ECHO OBSERVES
+CASEY CORRECTS AND DIRECTS
+→ ECHO OBSERVES
 → AKOS GOVERNS
 → ECHO IMPROVES
 → AKOS VERIFIES
@@ -99,7 +113,7 @@ tests/
 manifests/
   ECHO_MANIFEST.yaml   Machine-readable paired-system contract
 docs/
-  AKOS_CONTRACT.md     Pillar–piston authority boundary
+  AKOS_CONTRACT.md     Casey–AKOS–ECHO authority and operating boundary
 ```
 
 All three behavioral tests pass. The CLI `verify` command returns `VERIFIED`. The system is self-checking.
@@ -116,6 +130,7 @@ This layer is the mounting plane. ECHO is deliberately shaped so that other syst
 identity:
   name: ECHO
   role: piston
+  human_authority: Casey Del Carpio Barton
   pillar: AKOS
   version: "0.1.0"
   repository: GlacierEQ/ECHO
@@ -126,26 +141,27 @@ identity:
 
 | System / Repo                          | Relationship to ECHO                                      |
 |----------------------------------------|-----------------------------------------------------------|
-| [AKOS](https://github.com/GlacierEQ/AKOS) | The Pillar. Governs identity, truth, authority, contracts |
-| GlacierEQ / pro-code + pro_code        | Source of engineering discipline and masterclass patterns |
+| [AKOS](https://github.com/GlacierEQ/AKOS) | The Pillar. Governs machine identity, truth classification, authority, contracts under Casey |
+| GlacierEQ / pro-code + Pro_Code        | Source of engineering discipline and masterclass patterns |
 | GlacierEQ / make-it-heavy              | Agent swarm and heavy orchestration patterns              |
 | GlacierEQ / apex-fs-commander          | Filesystem and operational command layer                  |
 | GlacierEQ / hawaii-family-court-legal-automation | Domain evidence and motion systems that ECHO can carry |
 | GlacierEQ / xai-colossal-cooling       | Infrastructure excellence patterns                        |
 
-ECHO does not own the truth. It carries it, routes it, and produces receipts that the pillar can promote into the permanent ledger.
+ECHO does not own Casey's truth claim. It carries it, routes it, recovers its evidence, and produces receipts that AKOS can classify and promote under Casey's final human authority.
 
 ### Machine-readable contract
 
-See `manifests/ECHO_MANIFEST.yaml` and `docs/AKOS_CONTRACT.md`.
+See `manifests/ECHO_MANIFEST.yaml`, `docs/AKOS_CONTRACT.md`, and `OPERATOR_AUTHORITY_AND_PROOF_PROTOCOL.md`.
 
-Any agent or orchestrator that understands the AKOS–ECHO paired-system model can:
+Any agent or orchestrator that understands the Casey–AKOS–ECHO paired-system model can:
 
 1. Ingest continuity through the REST surface
 2. Enqueue work as idempotent jobs
 3. Collect receipts
 4. Observe recommendations
 5. Feed the next improvement cycle back through AKOS governance
+6. Preserve an operator assertion until its proof state is resolved
 
 ### Operator surface (selected)
 
@@ -177,6 +193,7 @@ It is self-evolving through the observe → govern → improve → verify loop w
 
 **ECHO v0.1.0 — Born Working**
 
+Casey is the authority.  
 The piston is live.  
 The pillar is recognized.  
 The mesh is declared.
