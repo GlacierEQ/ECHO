@@ -18,3 +18,7 @@ def test_public_readme_declares_sanitized_capability_boundary() -> None:
     text = README.read_text(encoding="utf-8").casefold()
     assert "only separately admitted, sanitized capabilities may cross this boundary" in text
     assert "case-specific" in text
+    assert (
+        "a private/domain system can contribute only a separately sanitized "
+        "transferable capability after its own admission gate passes."
+    ) in text
