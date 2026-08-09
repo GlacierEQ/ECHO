@@ -145,8 +145,12 @@ identity:
 | GlacierEQ / pro-code + Pro_Code        | Source of engineering discipline and masterclass patterns |
 | GlacierEQ / make-it-heavy              | Agent swarm and heavy orchestration patterns              |
 | GlacierEQ / apex-fs-commander          | Filesystem and operational command layer                  |
-| GlacierEQ / hawaii-family-court-legal-automation | Domain evidence and motion systems that ECHO can carry |
+| Private / domain-specific systems      | Deliberately excluded from the public mesh; only separately admitted, sanitized capabilities may cross this boundary |
 | GlacierEQ / xai-colossal-cooling       | Infrastructure excellence patterns                        |
+
+### Public boundary
+
+ECHO's public mesh is an engineering topology, not a directory of private work. Case-specific, legal, credential-bearing, personal, or otherwise sensitive repositories are not linked or projected from this public front door. A private/domain system can contribute only a separately sanitized transferable capability after its own admission gate passes.
 
 ECHO does not own Casey's truth claim. It carries it, routes it, recovers its evidence, and produces receipts that AKOS can classify and promote under Casey's final human authority.
 
