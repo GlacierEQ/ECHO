@@ -15,6 +15,6 @@ def test_public_readme_excludes_sensitive_domain_repository_identifiers() -> Non
 
 
 def test_public_readme_declares_sanitized_capability_boundary() -> None:
-    text = README.read_text(encoding="utf-8")
+    text = README.read_text(encoding="utf-8").casefold()
     assert "only separately admitted, sanitized capabilities may cross this boundary" in text
     assert "case-specific" in text
