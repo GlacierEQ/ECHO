@@ -27,8 +27,8 @@
       "technology": "WASI 0.3",
       "published_at": "2026-06-11",
       "maturity": "stable",
-      "primary_source": "https://bytecodealliance.org/articles/wasi-0.3",
-      "signal": "Native async in WebAssembly Components through the ratified WASI 0.3 component model.",
+      "primary_source": "https://bytecodealliance.org/articles/WASI-0.3",
+      "signal": "Native async in WebAssembly Components through the ratified WASI 0.3 component model, including host-coordinated async composition and direct service chaining.",
       "target_boundaries": ["async_components", "portable_worker_contracts"],
       "disposition": "EXPERIMENT",
       "next_measurement": "Prototype an async component contract for a detachable ECHO worker and measure call overhead, isolation, portability, and interface friction."
@@ -48,20 +48,18 @@
       "published_at": "2026-07-18",
       "maturity": "release_candidate",
       "primary_source": "https://blog.python.org/2026/07/python-3150-beta-4/",
-      "signal": "Python 3.15 reached final beta while 3.14 provides supported free-threading, multiple interpreters, deferred annotations, t-strings, and stdlib zstd.",
+      "signal": "Python 3.15 reached final beta while the 3.14 line provides supported free-threading, multiple interpreters, deferred annotations, t-strings, and stdlib zstd.",
       "target_boundaries": ["parallel_python", "document_intelligence", "orchestration"],
       "disposition": "COMPATIBILITY_EXPERIMENT",
       "next_measurement": "Add preview compatibility where repository economics justify it; do not raise the production floor until native dependencies and benchmarks pass."
-    },
+    }
+  ],
+  "watch_only": [
     {
       "technology": "Go 1.27",
-      "published_at": "2026-08-15",
-      "maturity": "preview",
+      "observed_at": "2026-08-15",
       "primary_source": "https://go.dev/doc/go1.27",
-      "signal": "Draft release notes expose generic methods, faster allocation work, goroutine leak profiling, JSON v2, ML-DSA, UUID, and SIMD work, but the release is not yet final.",
-      "target_boundaries": ["distributed_services", "low_overhead_daemons"],
-      "disposition": "HOLD_WITH_REASON",
-      "reason": "Go 1.27 is not yet released; retain as a frontier candidate and test after a stable release or explicit preview experiment."
+      "reason": "The official page is still draft release notes and states that Go 1.27 is not yet released. Keep the generic-methods, allocation, goroutine-leak, JSON v2, ML-DSA, UUID, and SIMD changes on the watch list without laundering preview material into a stable adoption claim."
     }
   ],
   "implemented_today": [
