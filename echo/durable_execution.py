@@ -1,7 +1,7 @@
 """Durable transactional execution state for ECHO.
 
 This is a source-counterengineered synthesis rather than a Temporal or database
-wrapper.  It combines durable execution history/replay mechanics with
+wrapper. It combines durable execution history/replay mechanics with
 transactional queue ownership and fencing tokens so ECHO's provider-neutral
 execution mesh survives process death and rejects stale workers.
 """
@@ -9,12 +9,11 @@ execution mesh survives process death and rejects stale workers.
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, or_, select
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from echo.execution_mesh import (
@@ -22,14 +21,17 @@ from echo.execution_mesh import (
     ExecutionSnapshot,
     ExecutionTask,
     ResourceEnvelope,
-    TaskRuntime,
     TaskState,
     WorkerResult,
 )
 from echo.models import Base, canonical_json, utcnow
 
 
-TERMINAL_STATES = {TaskState.SUCCEEDED.value, TaskState.FAILED.value, TaskState.BLOCKED.value}
+TERMINAL_STATES = {
+    TaskState.SUCCEEDED.value,
+    TaskState.FAILED.value,
+    TaskState.BLOCKED.value,
+}
 CLAIMABLE_STATES = {TaskState.PENDING.value}
 
 
@@ -45,14 +47,22 @@ def _hash(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _task_row_id(run_id: str, task_id: str) -> str:
+    return _hash({"run_id": run_id, "task_id": task_id})
+
+
 class DurableRunORM(Base):
     __tablename__ = "execution_runs"
 
     run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="active", nullable=False, index=True
+    )
     event_head_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
@@ -61,20 +71,28 @@ class DurableRunORM(Base):
 class DurableTaskORM(Base):
     __tablename__ = "execution_tasks"
 
-    id: Mapped[str] = mapped_column(String(320), primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        String(128), ForeignKey("execution_runs.run_id", ondelete="CASCADE"), index=True
+        String(128),
+        ForeignKey("execution_runs.run_id", ondelete="CASCADE"),
+        index=True,
     )
     task_id: Mapped[str] = mapped_column(String(192), index=True)
     definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default=TaskState.PENDING.value, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default=TaskState.PENDING.value, nullable=False, index=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     lease_owner: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     lease_epoch: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
@@ -84,7 +102,9 @@ class DurableSnapshotORM(Base):
     __tablename__ = "execution_snapshots"
 
     run_id: Mapped[str] = mapped_column(
-        String(128), ForeignKey("execution_runs.run_id", ondelete="CASCADE"), primary_key=True
+        String(128),
+        ForeignKey("execution_runs.run_id", ondelete="CASCADE"),
+        primary_key=True,
     )
     digest: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -99,15 +119,21 @@ class DurableEventORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(
-        String(128), ForeignKey("execution_runs.run_id", ondelete="CASCADE"), index=True
+        String(128),
+        ForeignKey("execution_runs.run_id", ondelete="CASCADE"),
+        index=True,
     )
-    task_id: Mapped[str] = mapped_column(String(192), default="", nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(
+        String(192), default="", nullable=False, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     lease_epoch: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     previous_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 DURABLE_TABLES = (
@@ -136,7 +162,7 @@ class DurableExecutionStore:
 
     PostgreSQL claims use ``FOR UPDATE SKIP LOCKED`` so competing consumers can
     select queue-like work without waiting on rows already owned by another
-    transaction.  Every claim increments a fencing epoch.  Completion, failure,
+    transaction. Every claim increments a fencing epoch. Completion, failure,
     and heartbeat calls must present the current epoch, preventing a recovered
     stale worker from committing after another worker has taken ownership.
     """
@@ -164,7 +190,10 @@ class DurableExecutionStore:
 
     @classmethod
     def definition_hash(cls, tasks: Sequence[ExecutionTask]) -> str:
-        payload = [cls._definition(task) for task in sorted(tasks, key=lambda item: item.task_id)]
+        payload = [
+            cls._definition(task)
+            for task in sorted(tasks, key=lambda item: item.task_id)
+        ]
         return _hash({"tasks": payload})
 
     def ensure_run(self, run_id: str, mesh: ExecutionMesh) -> None:
@@ -183,7 +212,7 @@ class DurableExecutionStore:
         for task in sorted(mesh.tasks.values(), key=lambda item: item.task_id):
             self.session.add(
                 DurableTaskORM(
-                    id=f"{run_id}:{task.task_id}",
+                    id=_task_row_id(run_id, task.task_id),
                     run_id=run_id,
                     task_id=task.task_id,
                     definition=self._definition(task),
@@ -191,7 +220,9 @@ class DurableExecutionStore:
                 )
             )
         self.session.flush()
-        self._append_event(run_id, "", "run_created", 0, {"definition_hash": expected_hash})
+        self._append_event(
+            run_id, "", "run_created", 0, {"definition_hash": expected_hash}
+        )
 
     def _lock_run(self, run_id: str) -> DurableRunORM:
         stmt = select(DurableRunORM).where(DurableRunORM.run_id == run_id)
@@ -285,34 +316,86 @@ class DurableExecutionStore:
             ).all()
         )
 
-    def recover_expired(self, run_id: str, *, now: datetime | None = None) -> tuple[str, ...]:
+    def _propagate_blocked(self, run_id: str) -> tuple[str, ...]:
+        """Persist failure isolation semantics into the durable state plane."""
+        blocked: list[str] = []
+        changed = True
+        while changed:
+            changed = False
+            rows = self._task_rows(run_id)
+            by_id = {row.task_id: row for row in rows}
+            for row in rows:
+                if row.status != TaskState.PENDING.value:
+                    continue
+                dependencies = row.definition.get("dependencies", [])
+                blockers = sorted(
+                    dependency
+                    for dependency in dependencies
+                    if dependency in by_id
+                    and by_id[dependency].status
+                    in {TaskState.FAILED.value, TaskState.BLOCKED.value}
+                )
+                if not blockers:
+                    continue
+                row.status = TaskState.BLOCKED.value
+                row.last_error = "blocked by failed dependency: " + ",".join(blockers)
+                self._append_event(
+                    run_id,
+                    row.task_id,
+                    "task_blocked",
+                    row.lease_epoch,
+                    {"blockers": blockers},
+                )
+                blocked.append(row.task_id)
+                changed = True
+        self.session.flush()
+        return tuple(sorted(set(blocked)))
+
+    def recover_expired(
+        self, run_id: str, *, now: datetime | None = None
+    ) -> tuple[str, ...]:
         now = _aware(now or utcnow())
         recovered: list[str] = []
         for row in self._task_rows(run_id):
             expires = _aware(row.lease_expires_at)
-            if (
+            if not (
                 row.status in {TaskState.LEASED.value, TaskState.RUNNING.value}
                 and expires is not None
                 and expires <= now
             ):
-                prior_owner = row.lease_owner
+                continue
+            prior_owner = row.lease_owner
+            max_attempts = int(row.definition.get("max_attempts", 1))
+            row.lease_owner = ""
+            row.lease_expires_at = None
+            row.last_error = "expired durable lease recovered"
+            if row.attempts >= max_attempts:
+                row.status = TaskState.FAILED.value
+                event_type = "lease_expired_exhausted"
+            else:
                 row.status = TaskState.PENDING.value
-                row.lease_owner = ""
-                row.lease_expires_at = None
-                row.last_error = "expired durable lease recovered"
-                self._append_event(
-                    run_id,
-                    row.task_id,
-                    "lease_expired",
-                    row.lease_epoch,
-                    {"prior_owner": prior_owner},
-                )
-                recovered.append(row.task_id)
+                event_type = "lease_expired"
+            self._append_event(
+                run_id,
+                row.task_id,
+                event_type,
+                row.lease_epoch,
+                {
+                    "prior_owner": prior_owner,
+                    "attempts": row.attempts,
+                    "max_attempts": max_attempts,
+                },
+            )
+            recovered.append(row.task_id)
+        self._propagate_blocked(run_id)
+        self._update_run_terminal_state(run_id)
         self.session.flush()
         return tuple(sorted(recovered))
 
     def _dependency_success(self, rows: Sequence[DurableTaskORM]) -> set[str]:
-        return {row.task_id for row in rows if row.status == TaskState.SUCCEEDED.value}
+        return {
+            row.task_id for row in rows if row.status == TaskState.SUCCEEDED.value
+        }
 
     def _claimable_ids(
         self,
@@ -327,14 +410,20 @@ class DurableExecutionStore:
         for row in rows:
             expires = _aware(row.lease_expires_at)
             expired = expires is not None and expires <= now
+            max_attempts = int(row.definition.get("max_attempts", 1))
+            if row.attempts >= max_attempts:
+                continue
             if row.status not in CLAIMABLE_STATES and not (
-                row.status in {TaskState.LEASED.value, TaskState.RUNNING.value} and expired
+                row.status in {TaskState.LEASED.value, TaskState.RUNNING.value}
+                and expired
             ):
                 continue
             definition = row.definition
             if not set(definition.get("dependencies", [])).issubset(succeeded):
                 continue
-            if not set(definition.get("required_capabilities", [])).issubset(capabilities):
+            if not set(definition.get("required_capabilities", [])).issubset(
+                capabilities
+            ):
                 continue
             candidates.append((-int(definition.get("priority", 0)), row.task_id))
         candidates.sort()
@@ -371,6 +460,9 @@ class DurableExecutionStore:
             if row is None:
                 continue
             expires = _aware(row.lease_expires_at)
+            max_attempts = int(row.definition.get("max_attempts", 1))
+            if row.attempts >= max_attempts:
+                continue
             if row.status != TaskState.PENDING.value and not (
                 row.status in {TaskState.LEASED.value, TaskState.RUNNING.value}
                 and expires is not None
@@ -388,7 +480,10 @@ class DurableExecutionStore:
                 task_id,
                 "task_leased",
                 row.lease_epoch,
-                {"worker_id": worker_id, "expires_at": row.lease_expires_at.isoformat()},
+                {
+                    "worker_id": worker_id,
+                    "expires_at": row.lease_expires_at.isoformat(),
+                },
             )
             self.session.flush()
             return LeaseToken(
@@ -417,7 +512,9 @@ class DurableExecutionStore:
             raise StaleLeaseError("lease has expired")
         return row
 
-    def mark_running(self, token: LeaseToken, *, now: datetime | None = None) -> None:
+    def mark_running(
+        self, token: LeaseToken, *, now: datetime | None = None
+    ) -> None:
         row = self._validate_token(token, now=now)
         row.status = TaskState.RUNNING.value
         self._append_event(
@@ -446,7 +543,10 @@ class DurableExecutionStore:
             token.task_id,
             "lease_heartbeat",
             token.epoch,
-            {"worker_id": token.worker_id, "expires_at": row.lease_expires_at.isoformat()},
+            {
+                "worker_id": token.worker_id,
+                "expires_at": row.lease_expires_at.isoformat(),
+            },
         )
         self.session.flush()
         return LeaseToken(
@@ -514,7 +614,9 @@ class DurableExecutionStore:
         row = self._validate_token(token, now=now)
         max_attempts = int(row.definition.get("max_attempts", 1))
         should_retry = retry and row.attempts < max_attempts
-        row.status = TaskState.PENDING.value if should_retry else TaskState.FAILED.value
+        row.status = (
+            TaskState.PENDING.value if should_retry else TaskState.FAILED.value
+        )
         row.last_error = error
         row.lease_owner = ""
         row.lease_expires_at = None
@@ -525,6 +627,8 @@ class DurableExecutionStore:
             token.epoch,
             {"worker_id": token.worker_id, "error": error},
         )
+        if not should_retry:
+            self._propagate_blocked(token.run_id)
         self._update_run_terminal_state(token.run_id)
         self.session.flush()
         return row.status
@@ -533,7 +637,11 @@ class DurableExecutionStore:
         rows = self._task_rows(run_id)
         run = self._lock_run(run_id)
         if rows and all(row.status in TERMINAL_STATES for row in rows):
-            run.status = "failed" if any(row.status == TaskState.FAILED.value for row in rows) else "succeeded"
+            run.status = (
+                "failed"
+                if any(row.status == TaskState.FAILED.value for row in rows)
+                else "succeeded"
+            )
         else:
             run.status = "active"
 
@@ -548,7 +656,10 @@ class DurableExecutionStore:
         if recalculated != snapshot.digest:
             raise ValueError("execution snapshot digest mismatch")
         row = self.session.get(DurableSnapshotORM, run_id)
-        receipt_head = str(snapshot.payload.get("receipts", [{}])[-1].get("content_hash", "")) if snapshot.payload.get("receipts") else ""
+        receipts = snapshot.payload.get("receipts", [])
+        receipt_head = (
+            str(receipts[-1].get("content_hash", "")) if receipts else ""
+        )
         if row is None:
             row = DurableSnapshotORM(
                 run_id=run_id,
@@ -583,7 +694,6 @@ class DurableExecutionStore:
         if row is None:
             return None
         snapshot = ExecutionSnapshot(payload=dict(row.payload), digest=row.digest)
-        # Reuse ECHO's digest validator before returning persisted state.
         ExecutionMesh.from_snapshot(snapshot)
         return snapshot
 
@@ -603,12 +713,11 @@ class DurableExecutionStore:
         )
 
     def restore_mesh(self, run_id: str) -> ExecutionMesh:
-        """Rehydrate execution from snapshot, then overlay newer durable task state.
+        """Rehydrate from snapshot, then overlay newer durable task commits.
 
-        The overlay matters when a process dies after a task commit but before
-        the next wave snapshot.  Persisted task state is therefore authoritative
-        for execution progress; snapshots accelerate reconstruction rather than
-        becoming a second truth source.
+        Persisted task state wins when a process dies after a task commit but
+        before the next wave snapshot. Snapshots accelerate reconstruction; they
+        do not become a second execution truth source.
         """
         self.recover_expired(run_id)
         rows = self._task_rows(run_id)
@@ -628,12 +737,17 @@ class DurableExecutionStore:
             state.attempts = row.attempts
             state.lease_owner = row.lease_owner
             state.lease_expires_at = (
-                _aware(row.lease_expires_at).timestamp() if row.lease_expires_at else 0.0
+                _aware(row.lease_expires_at).timestamp()
+                if row.lease_expires_at
+                else 0.0
             )
             state.last_error = row.last_error
             if row.status == TaskState.SUCCEEDED.value and row.result:
                 mesh.results[row.task_id] = self._deserialize_result(row.result)
-            elif row.task_id in mesh.results and row.status != TaskState.SUCCEEDED.value:
+            elif (
+                row.task_id in mesh.results
+                and row.status != TaskState.SUCCEEDED.value
+            ):
                 del mesh.results[row.task_id]
         return mesh
 
