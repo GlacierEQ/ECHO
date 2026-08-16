@@ -1,7 +1,7 @@
 [project]
 name = "echo"
-version = "0.1.0"
-description = "ECHO — Engine for Continuity, History, and Orchestration. The Piston to AKOS's Pillar."
+version = "0.2.0"
+description = "ECHO — APEX kinetic continuity engine for execution, recovery, replay, durable coordination, frontier continuity, and heterogeneous worker motion."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
