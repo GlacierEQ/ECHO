@@ -49,7 +49,7 @@ class SchedulingIntent:
     seats: int = 1
     resources: Mapping[str, float] = field(default_factory=dict)
     placement_group: str = ""
-    placement_strategy: str = "none"  # none | pack | spread
+    placement_strategy: str = "none"
     gang: bool = False
     topology: Mapping[str, str] = field(default_factory=dict)
     required_worker_version: str = ""
@@ -212,7 +212,9 @@ class _PlanningState:
                 worker: dict(values) for worker, values in self.resources_used.items()
             },
             assignments=dict(self.assignments),
-            group_workers={group: list(workers) for group, workers in self.group_workers.items()},
+            group_workers={
+                group: list(workers) for group, workers in self.group_workers.items()
+            },
             fairness_assignments=dict(self.fairness_assignments),
             seats_used=self.seats_used,
         )
@@ -280,8 +282,7 @@ class ResourceFairScheduler:
             attempts = mesh.runtime[task_id].attempts
             if attempts:
                 served[intent.fairness_key] = (
-                    served.get(intent.fairness_key, 0.0)
-                    + attempts * intent.seats
+                    served.get(intent.fairness_key, 0.0) + attempts * intent.seats
                 )
         return {
             key: served.get(key, 0.0) / weight
@@ -304,7 +305,8 @@ class ResourceFairScheduler:
         intent: SchedulingIntent,
     ) -> bool:
         return all(
-            name in profile.resources and amount <= profile.resources[name] + 1e-12
+            name in profile.resources
+            and amount <= profile.resources[name] + 1e-12
             for name, amount in intent.resources.items()
         )
 
@@ -359,10 +361,16 @@ class ResourceFairScheduler:
             return list(candidates), False
         previous = state.group_workers.get(intent.placement_group, [])
         if intent.placement_strategy == "pack" and previous:
-            packed = [worker for worker in candidates if worker.worker_id == previous[0]]
+            packed = [
+                worker for worker in candidates if worker.worker_id == previous[0]
+            ]
             return packed, not packed and bool(candidates)
         if intent.placement_strategy == "spread" and previous:
-            unused = [worker for worker in candidates if worker.worker_id not in set(previous)]
+            unused = [
+                worker
+                for worker in candidates
+                if worker.worker_id not in set(previous)
+            ]
             if unused:
                 return unused, False
             return list(candidates), False
@@ -560,12 +568,14 @@ class ResourceFairScheduler:
     ) -> SchedulingDecision:
         weights = self._fairness_weights(mesh)
         service = self._service(mesh, weights)
-        union_capabilities = (
-            frozenset().union(*(backend.capabilities for backend in backends))
-            if backends
+        declared_capabilities = (
+            frozenset().union(
+                *(task.required_capabilities for task in mesh.tasks.values())
+            )
+            if mesh.tasks
             else frozenset()
         )
-        ready = list(mesh.ready(union_capabilities))
+        ready = list(mesh.ready(declared_capabilities))
         units, readiness_deferred = self._ready_units(mesh, ready)
         if not backends:
             return SchedulingDecision(
