@@ -24,6 +24,15 @@
       ]
     },
     {
+      "source": "https://openai.github.io/openai-agents-python/guardrails/",
+      "family": "OpenAI Agents SDK guardrails",
+      "mechanics_extracted": [
+        "pre-execution tool-call interception",
+        "post-execution result interception",
+        "fail-fast execution tripwires"
+      ]
+    },
+    {
       "source": "https://bytecodealliance.org/articles/WASI-0.3",
       "family": "WASI 0.3",
       "mechanics_extracted": [
@@ -31,6 +40,15 @@
         "typed async composition across language boundaries",
         "stream data separated from independent terminal completion",
         "direct in-process service chaining instead of mandatory network hops"
+      ]
+    },
+    {
+      "source": "https://bytecodealliance.org/articles/how-wasm-components-enable-pluggable-middleware",
+      "family": "WebAssembly Component Model interposition",
+      "mechanics_extracted": [
+        "middleware interposition at interface boundaries",
+        "composable wrappers without changing the wrapped component",
+        "service chaining through typed boundaries"
       ]
     },
     {
@@ -48,19 +66,32 @@
     "deterministic dependency DAG scheduling",
     "bounded parallel execution waves",
     "capability-routed detachable workers",
+    "heterogeneous worker federation with capability-fitness specialist selection",
+    "same-wave execution across different worker/runtime types",
     "per-task workspace identity",
     "worker leases with stale-worker recovery",
     "hard resource envelopes without minimizing ambition",
     "failure-domain isolation so independent branches continue",
     "dependency output and terminal-state chaining",
     "stream payload separated from terminal completion",
+    "provider-neutral execution interposition for policy, tracing, evidence, caching, normalization, and result transforms",
+    "blocking preflight middleware that can prevent compute before it starts",
     "hash-chained execution receipts",
-    "digest-protected snapshot and rehydration across worker/session replacement"
+    "digest-protected snapshot and rehydration across worker/session replacement",
+    "checkpoint after each federated execution wave"
   ],
   "implementation": {
-    "module": "echo/execution_mesh.py",
-    "tests": "tests/test_execution_mesh.py",
+    "modules": [
+      "echo/execution_mesh.py",
+      "echo/federation.py",
+      "echo/interposition.py"
+    ],
+    "tests": [
+      "tests/test_execution_mesh.py",
+      "tests/test_federation.py",
+      "tests/test_interposition.py"
+    ],
     "status": "IMPLEMENTED_PENDING_NATIVE_CI"
   },
-  "next_boundary": "bind persistent transactional lease storage and add Wasmtime/WASI and model-agent worker adapters behind WorkerBackend"
+  "next_boundary": "bind persistent transactional lease storage and add Wasmtime/WASI, local-process, accelerator, and model-agent worker adapters behind WorkerBackend"
 }
