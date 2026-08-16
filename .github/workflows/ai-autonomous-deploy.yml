@@ -33,24 +33,35 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Resolve specification
         id: spec
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_SPEC: ${{ inputs.deploy_spec_json || github.event.client_payload.deploy_spec_json || '' }}
           PAYLOAD_DEPLOY: ${{ github.event.client_payload.deploy_command || '' }}
           PAYLOAD_ROLLBACK: ${{ github.event.client_payload.rollback_command || '' }}
           PAYLOAD_HEALTH: ${{ github.event.client_payload.health_url || '' }}
+          SECRET_DEPLOY: ${{ secrets.DEPLOY_COMMAND || '' }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] \
+            && [ -z "${INPUT_SPEC}" ] \
+            && [ -z "${PAYLOAD_DEPLOY}" ] \
+            && [ -z "${SECRET_DEPLOY}" ] \
+            && [ ! -f deploy.spec.json ]; then
+            echo "::error::No external deployment specification or DEPLOY_COMMAND is configured for a main push."
+            echo "Refusing to treat an ephemeral runner-local container as a production deployment."
+            exit 78
+          fi
           if [ -n "${INPUT_SPEC}" ]; then
             echo "DEPLOY_SPEC_JSON<<EOF" >> "$GITHUB_ENV"
             echo "${INPUT_SPEC}" >> "$GITHUB_ENV"
@@ -86,7 +97,7 @@ jobs:
 
       - name: Upload deployment evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deployment-evidence-${{ github.run_id }}
           path: |
