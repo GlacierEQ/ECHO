@@ -9,6 +9,7 @@ from echo.db import get_session, init_db
 from echo.durable_execution import (
     DurableEventORM,
     DurableExecutionStore,
+    DurableRunORM,
     DurableTaskORM,
     StaleLeaseError,
 )
@@ -73,7 +74,7 @@ def test_durable_claim_requires_dependency_success_and_routes_capability(store):
 
 
 def test_fencing_token_rejects_worker_after_expiry_and_reclaim(store):
-    execution = ExecutionMesh([ExecutionTask("a", "run")])
+    execution = ExecutionMesh([ExecutionTask("a", "run", max_attempts=2)])
     store.ensure_run("run-fence", execution)
     start = datetime(2026, 8, 16, 6, 0, tzinfo=timezone.utc)
 
@@ -187,6 +188,56 @@ def test_retry_preserves_history_and_releases_work(store):
     )
     assert row.status == TaskState.FAILED.value
     assert store.verify_history("run-retry") is True
+
+
+def test_terminal_failure_persists_blocked_descendants_and_run_failure(store):
+    execution = ExecutionMesh(
+        [
+            ExecutionTask("root", "run", max_attempts=1),
+            ExecutionTask("child", "run", dependencies=("root",)),
+        ]
+    )
+    store.ensure_run("run-block", execution)
+    lease = store.claim_next("run-block", "worker", frozenset())
+    assert lease is not None and lease.task_id == "root"
+    assert store.fail(lease, "terminal", retry=False) == TaskState.FAILED.value
+
+    rows = {
+        row.task_id: row
+        for row in store.session.scalars(
+            select(DurableTaskORM).where(DurableTaskORM.run_id == "run-block")
+        ).all()
+    }
+    assert rows["root"].status == TaskState.FAILED.value
+    assert rows["child"].status == TaskState.BLOCKED.value
+    run = store.session.get(DurableRunORM, "run-block")
+    assert run.status == "failed"
+    assert [item["event_type"] for item in store.history("run-block")][-2:] == [
+        "task_failed",
+        "task_blocked",
+    ]
+
+
+def test_expired_final_attempt_fails_instead_of_requeueing_forever(store):
+    execution = ExecutionMesh([ExecutionTask("a", "run", max_attempts=1)])
+    store.ensure_run("run-expired", execution)
+    start = datetime(2026, 8, 16, 6, 0, tzinfo=timezone.utc)
+    lease = store.claim_next(
+        "run-expired", "worker", frozenset(), lease_seconds=5, now=start
+    )
+    assert lease is not None
+
+    assert store.recover_expired(
+        "run-expired", now=start + timedelta(seconds=6)
+    ) == ("a",)
+    assert store.claim_next(
+        "run-expired", "replacement", frozenset(), now=start + timedelta(seconds=6)
+    ) is None
+    row = store.session.scalar(
+        select(DurableTaskORM).where(DurableTaskORM.run_id == "run-expired")
+    )
+    assert row.status == TaskState.FAILED.value
+    assert store.session.get(DurableRunORM, "run-expired").status == "failed"
 
 
 def test_postgres_claim_contract_contains_skip_locked():
