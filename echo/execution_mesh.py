@@ -1,16 +1,9 @@
 """Counter-engineered long-horizon execution mesh for ECHO.
 
-This module deliberately copies *mechanics*, not vendor APIs:
-- harness/compute separation and resumable worker state;
-- host-owned scheduling across detachable workers;
-- bounded parallel execution with capability routing;
-- stream data separated from terminal completion state;
-- disposable workspace identities and failure-domain isolation;
-- leases, stale-worker recovery, resource envelopes, and hash-chained receipts.
-
-The result is provider-neutral.  A model SDK, local process, remote worker, Wasm
-component, container, or future runtime can implement ``WorkerBackend`` without
-changing the ECHO scheduling/state machine.
+The mesh copies execution mechanics, not vendor APIs: host-owned scheduling,
+detachable workers, bounded parallel DAG execution, failure isolation, leases,
+resource envelopes, stream/terminal separation, resumable snapshots, and
+hash-chained receipts.  Durable state belongs to ECHO, not to a worker process.
 """
 
 from __future__ import annotations
@@ -35,12 +28,7 @@ class TaskState(str, Enum):
 
 @dataclass(frozen=True)
 class ResourceEnvelope:
-    """Hard per-task execution envelope.
-
-    Envelopes bound execution cost; they do not optimize for smallness.  The
-    scheduler is free to use the entire envelope when that produces the best
-    coherent result.
-    """
+    """Hard execution envelope.  A ceiling is not a minimization target."""
 
     max_agent_steps: int = 32
     max_tool_calls: int = 64
@@ -82,11 +70,7 @@ class ExecutionTask:
 
 @dataclass(frozen=True)
 class WorkerResult:
-    """Data stream and terminal completion are intentionally independent.
-
-    A consumer may use some or all stream items while still receiving a final
-    terminal result that says whether the operation completed successfully.
-    """
+    """Stream data and terminal completion are independent result channels."""
 
     output: Mapping[str, Any] = field(default_factory=dict)
     stream: tuple[Any, ...] = ()
@@ -96,14 +80,13 @@ class WorkerResult:
 
     @property
     def output_bytes(self) -> int:
-        payload = {
-            "output": self.output,
-            "stream": self.stream,
-            "terminal": self.terminal,
-        }
         return len(
             json.dumps(
-                payload,
+                {
+                    "output": self.output,
+                    "stream": self.stream,
+                    "terminal": self.terminal,
+                },
                 sort_keys=True,
                 separators=(",", ":"),
                 default=str,
@@ -120,7 +103,7 @@ class ExecutionContext:
 
 
 class WorkerBackend(Protocol):
-    """Compute boundary.  ECHO owns orchestration; a backend owns execution."""
+    """Compute boundary. ECHO owns orchestration; a backend owns execution."""
 
     worker_id: str
     capabilities: frozenset[str]
@@ -160,7 +143,7 @@ class ExecutionSnapshot:
 
     def as_dict(self) -> Mapping[str, Any]:
         return {
-            "schema": "glaciereq.echo.execution-snapshot.v1",
+            "schema": "glaciereq.echo.execution-snapshot.v2",
             "digest": self.digest,
             "payload": self.payload,
         }
@@ -168,6 +151,8 @@ class ExecutionSnapshot:
 
 class ExecutionMesh:
     """Provider-neutral, resumable, failure-isolated execution harness."""
+
+    SNAPSHOT_CLOCK = "relative-lease-remaining-seconds-v1"
 
     def __init__(
         self,
@@ -219,19 +204,38 @@ class ExecutionMesh:
             raise ValueError("execution graph must be acyclic")
 
     def recover_stale_leases(self) -> tuple[str, ...]:
-        """Return abandoned work to the runnable pool after worker loss."""
+        """Recover abandoned work without bypassing the attempt budget."""
         now = self._clock()
         recovered: list[str] = []
         for task_id, state in self.runtime.items():
-            if (
-                state.state in {TaskState.LEASED, TaskState.RUNNING}
-                and state.lease_expires_at <= now
-            ):
+            if state.state not in {TaskState.LEASED, TaskState.RUNNING}:
+                continue
+            if state.lease_expires_at > now:
+                continue
+            task = self.tasks[task_id]
+            state.lease_owner = ""
+            state.lease_expires_at = 0.0
+            state.last_error = "stale lease recovered"
+            if state.attempts >= task.max_attempts:
+                state.state = TaskState.FAILED
+                self._append_receipt(
+                    task,
+                    state,
+                    "failed",
+                    "lease-recovery",
+                    {"error": state.last_error, "reason": "attempt_budget_exhausted"},
+                )
+            else:
                 state.state = TaskState.PENDING
-                state.lease_owner = ""
-                state.lease_expires_at = 0.0
-                state.last_error = "stale lease recovered"
-                recovered.append(task_id)
+                self._append_receipt(
+                    task,
+                    state,
+                    "retry",
+                    "lease-recovery",
+                    {"error": state.last_error},
+                )
+            recovered.append(task_id)
+        self._propagate_blocked()
         return tuple(sorted(recovered))
 
     def _propagate_blocked(self) -> None:
@@ -251,9 +255,8 @@ class ExecutionMesh:
                 ]
                 if blockers:
                     state.state = TaskState.BLOCKED
-                    state.last_error = (
-                        "blocked by failed dependency: "
-                        + ",".join(sorted(blockers))
+                    state.last_error = "blocked by failed dependency: " + ",".join(
+                        sorted(blockers)
                     )
                     self._append_receipt(
                         task,
@@ -279,17 +282,70 @@ class ExecutionMesh:
                 for dependency in task.dependencies
             ):
                 ready.append(task)
-        return tuple(
-            sorted(ready, key=lambda task: (-task.priority, task.task_id))
-        )
+        return tuple(sorted(ready, key=lambda task: (-task.priority, task.task_id)))
 
     def _lease(self, task: ExecutionTask, worker_id: str) -> None:
         state = self.runtime[task.task_id]
         if state.state != TaskState.PENDING:
             raise RuntimeError(f"task {task.task_id} is not pending")
+        if state.attempts >= task.max_attempts:
+            state.state = TaskState.FAILED
+            state.last_error = "max attempts exceeded before lease"
+            self._append_receipt(
+                task,
+                state,
+                "failed",
+                "scheduler",
+                {"error": state.last_error},
+            )
+            raise RuntimeError(f"task {task.task_id} exhausted attempts")
         state.state = TaskState.LEASED
         state.lease_owner = worker_id
         state.lease_expires_at = self._clock() + self.lease_seconds
+
+    def _owns_attempt(
+        self,
+        task_id: str,
+        worker_id: str,
+        attempt: int,
+        *,
+        require_live_lease: bool,
+    ) -> bool:
+        state = self.runtime[task_id]
+        if state.state != TaskState.RUNNING:
+            return False
+        if state.lease_owner != worker_id or state.attempts != attempt:
+            return False
+        if require_live_lease and state.lease_expires_at <= self._clock():
+            return False
+        return True
+
+    def _release_after_interruption(
+        self,
+        task: ExecutionTask,
+        state: TaskRuntime,
+        *,
+        worker_id: str,
+        outcome: str,
+        error: str,
+    ) -> None:
+        state.last_error = error
+        state.lease_owner = ""
+        state.lease_expires_at = 0.0
+        if state.attempts < task.max_attempts:
+            state.state = TaskState.PENDING
+            receipt_outcome = outcome
+        else:
+            state.state = TaskState.FAILED
+            receipt_outcome = "failed"
+        self._append_receipt(
+            task,
+            state,
+            receipt_outcome,
+            worker_id,
+            {"error": error},
+        )
+        self._propagate_blocked()
 
     async def _execute_one(
         self,
@@ -299,7 +355,10 @@ class ExecutionMesh:
         state = self.runtime[task.task_id]
         state.state = TaskState.RUNNING
         state.attempts += 1
+        attempt = state.attempts
+        worker_id = backend.worker_id
         state.lease_expires_at = self._clock() + self.lease_seconds
+
         context = ExecutionContext(
             workspace_id=task.workspace_id or f"echo:{task.task_id}",
             dependency_outputs={
@@ -310,7 +369,7 @@ class ExecutionMesh:
                 dependency: self.results[dependency].terminal
                 for dependency in task.dependencies
             },
-            attempt=state.attempts,
+            attempt=attempt,
         )
         try:
             result = await asyncio.wait_for(
@@ -318,21 +377,57 @@ class ExecutionMesh:
                 timeout=task.timeout_seconds,
             )
             self._validate_result(task, result)
+        except asyncio.CancelledError:
+            if self._owns_attempt(
+                task.task_id,
+                worker_id,
+                attempt,
+                require_live_lease=False,
+            ):
+                self._release_after_interruption(
+                    task,
+                    state,
+                    worker_id=worker_id,
+                    outcome="cancelled-retry",
+                    error="CancelledError: execution cancelled",
+                )
+            raise
         except Exception as exc:  # backend isolation boundary
-            state.last_error = f"{type(exc).__name__}: {exc}"
-            outcome = "retry" if state.attempts < task.max_attempts else "failed"
-            state.state = (
-                TaskState.PENDING if outcome == "retry" else TaskState.FAILED
-            )
-            state.lease_owner = ""
-            state.lease_expires_at = 0.0
-            self._append_receipt(
-                task,
-                state,
-                outcome,
-                backend.worker_id,
-                {"error": state.last_error},
-            )
+            if self._owns_attempt(
+                task.task_id,
+                worker_id,
+                attempt,
+                require_live_lease=False,
+            ):
+                self._release_after_interruption(
+                    task,
+                    state,
+                    worker_id=worker_id,
+                    outcome="retry",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            return
+
+        if not self._owns_attempt(
+            task.task_id,
+            worker_id,
+            attempt,
+            require_live_lease=True,
+        ):
+            # Never let an expired or superseded attempt overwrite replacement work.
+            if self._owns_attempt(
+                task.task_id,
+                worker_id,
+                attempt,
+                require_live_lease=False,
+            ):
+                self._release_after_interruption(
+                    task,
+                    state,
+                    worker_id=worker_id,
+                    outcome="retry",
+                    error="stale execution result rejected after lease expiry",
+                )
             return
 
         self.results[task.task_id] = result
@@ -344,7 +439,7 @@ class ExecutionMesh:
             task,
             state,
             "success",
-            backend.worker_id,
+            worker_id,
             {
                 "agent_steps": result.agent_steps,
                 "tool_calls": result.tool_calls,
@@ -365,6 +460,17 @@ class ExecutionMesh:
         if result.output_bytes > task.resources.max_output_bytes:
             raise RuntimeError("output-byte budget exceeded")
 
+    @staticmethod
+    def _receipt_digest(payload: Mapping[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
     def _append_receipt(
         self,
         task: ExecutionTask,
@@ -383,14 +489,6 @@ class ExecutionMesh:
             "details": details,
             "previous_hash": previous_hash,
         }
-        digest = hashlib.sha256(
-            json.dumps(
-                payload,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
         self.receipts.append(
             ExecutionReceipt(
                 task_id=task.task_id,
@@ -400,20 +498,17 @@ class ExecutionMesh:
                 workspace_id=task.workspace_id or f"echo:{task.task_id}",
                 details=dict(details),
                 previous_hash=previous_hash,
-                content_hash=digest,
+                content_hash=self._receipt_digest(payload),
             )
         )
 
     async def run_wave(self, backend: WorkerBackend) -> tuple[str, ...]:
-        """Run one parallel frontier wave and checkpoint after it returns."""
         ready = self.ready(backend.capabilities)[: self.max_concurrency]
         if not ready:
             return ()
         for task in ready:
             self._lease(task, backend.worker_id)
-        await asyncio.gather(
-            *(self._execute_one(backend, task) for task in ready)
-        )
+        await asyncio.gather(*(self._execute_one(backend, task) for task in ready))
         self._propagate_blocked()
         return tuple(task.task_id for task in ready)
 
@@ -429,14 +524,13 @@ class ExecutionMesh:
                 continue
             self._propagate_blocked()
             break
-        incomplete = [
+        incomplete = sorted(
             task_id
             for task_id, state in self.runtime.items()
-            if state.state
-            in {TaskState.PENDING, TaskState.LEASED, TaskState.RUNNING}
-        ]
+            if state.state in {TaskState.PENDING, TaskState.LEASED, TaskState.RUNNING}
+        )
         return {
-            "schema": "glaciereq.echo.execution-run.v1",
+            "schema": "glaciereq.echo.execution-run.v2",
             "waves": waves,
             "succeeded": sorted(
                 task_id
@@ -453,26 +547,28 @@ class ExecutionMesh:
                 for task_id, state in self.runtime.items()
                 if state.state == TaskState.BLOCKED
             ),
-            "incomplete": sorted(incomplete),
-            "receipt_head": (
-                self.receipts[-1].content_hash if self.receipts else ""
-            ),
+            "incomplete": incomplete,
+            "receipt_head": self.receipts[-1].content_hash if self.receipts else "",
         }
 
     def snapshot(self) -> ExecutionSnapshot:
+        now = self._clock()
         payload = {
+            "snapshot_version": 2,
+            "lease_clock": self.SNAPSHOT_CLOCK,
             "max_concurrency": self.max_concurrency,
             "lease_seconds": self.lease_seconds,
-            "tasks": [
-                self._task_dict(self.tasks[task_id])
-                for task_id in sorted(self.tasks)
-            ],
+            "tasks": [self._task_dict(self.tasks[task_id]) for task_id in sorted(self.tasks)],
             "runtime": {
                 task_id: {
                     "state": state.state.value,
                     "attempts": state.attempts,
                     "lease_owner": state.lease_owner,
-                    "lease_expires_at": state.lease_expires_at,
+                    "lease_remaining": (
+                        max(0.0, state.lease_expires_at - now)
+                        if state.state in {TaskState.LEASED, TaskState.RUNNING}
+                        else 0.0
+                    ),
                     "last_error": state.last_error,
                 }
                 for task_id, state in sorted(self.runtime.items())
@@ -516,6 +612,8 @@ class ExecutionMesh:
         ).hexdigest()
         if actual != expected:
             raise ValueError("execution snapshot digest mismatch")
+        if payload.get("lease_clock") != cls.SNAPSHOT_CLOCK:
+            raise ValueError("unsupported snapshot lease clock semantics")
 
         mesh = cls(
             [cls._task_from_dict(item) for item in payload["tasks"]],
@@ -523,14 +621,32 @@ class ExecutionMesh:
             lease_seconds=float(payload["lease_seconds"]),
             clock=clock,
         )
-        for task_id, raw in payload["runtime"].items():
+        task_ids = set(mesh.tasks)
+        runtime_payload = payload.get("runtime", {})
+        result_payload = payload.get("results", {})
+        if set(runtime_payload) != task_ids:
+            raise ValueError("snapshot runtime keys do not match task graph")
+        if not set(result_payload).issubset(task_ids):
+            raise ValueError("snapshot contains results for unknown tasks")
+
+        now = clock()
+        for task_id, raw in runtime_payload.items():
+            state = TaskState(raw["state"])
+            remaining = float(raw.get("lease_remaining", 0.0))
+            if remaining < 0:
+                raise ValueError("snapshot lease_remaining must be non-negative")
             mesh.runtime[task_id] = TaskRuntime(
-                state=TaskState(raw["state"]),
+                state=state,
                 attempts=int(raw["attempts"]),
                 lease_owner=str(raw["lease_owner"]),
-                lease_expires_at=float(raw["lease_expires_at"]),
+                lease_expires_at=(
+                    now + remaining
+                    if state in {TaskState.LEASED, TaskState.RUNNING}
+                    else 0.0
+                ),
                 last_error=str(raw["last_error"]),
             )
+
         mesh.results = {
             task_id: WorkerResult(
                 output=dict(raw["output"]),
@@ -539,21 +655,44 @@ class ExecutionMesh:
                 agent_steps=int(raw["agent_steps"]),
                 tool_calls=int(raw["tool_calls"]),
             )
-            for task_id, raw in payload["results"].items()
+            for task_id, raw in result_payload.items()
         }
-        mesh.receipts = [
-            ExecutionReceipt(
-                task_id=str(raw["task_id"]),
-                attempt=int(raw["attempt"]),
-                outcome=str(raw["outcome"]),
-                worker_id=str(raw["worker_id"]),
-                workspace_id=str(raw["workspace_id"]),
-                details=dict(raw["details"]),
-                previous_hash=str(raw["previous_hash"]),
-                content_hash=str(raw["content_hash"]),
+        for task_id, state in mesh.runtime.items():
+            if state.attempts < 0 or state.attempts > mesh.tasks[task_id].max_attempts:
+                raise ValueError("snapshot attempt count violates task budget")
+            if state.state == TaskState.SUCCEEDED and task_id not in mesh.results:
+                raise ValueError("succeeded snapshot task is missing its result")
+            if task_id in mesh.results and state.state != TaskState.SUCCEEDED:
+                raise ValueError("snapshot result exists for non-succeeded task")
+            if state.state in {TaskState.LEASED, TaskState.RUNNING} and not state.lease_owner:
+                raise ValueError("active snapshot task is missing lease owner")
+
+        mesh.receipts = []
+        previous_hash = ""
+        for raw in payload.get("receipts", []):
+            receipt_payload = {
+                "task_id": str(raw["task_id"]),
+                "attempt": int(raw["attempt"]),
+                "outcome": str(raw["outcome"]),
+                "worker_id": str(raw["worker_id"]),
+                "workspace_id": str(raw["workspace_id"]),
+                "details": dict(raw["details"]),
+                "previous_hash": str(raw["previous_hash"]),
+            }
+            if receipt_payload["task_id"] not in task_ids:
+                raise ValueError("snapshot receipt references unknown task")
+            if receipt_payload["previous_hash"] != previous_hash:
+                raise ValueError("snapshot receipt chain previous_hash mismatch")
+            computed = cls._receipt_digest(receipt_payload)
+            if computed != str(raw["content_hash"]):
+                raise ValueError("snapshot receipt content_hash mismatch")
+            receipt = ExecutionReceipt(
+                **receipt_payload,
+                content_hash=computed,
             )
-            for raw in payload["receipts"]
-        ]
+            mesh.receipts.append(receipt)
+            previous_hash = computed
+
         mesh.recover_stale_leases()
         return mesh
 
