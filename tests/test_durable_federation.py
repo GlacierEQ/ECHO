@@ -188,7 +188,7 @@ def test_heartbeat_keeps_long_specialist_execution_alive(tmp_path):
     try:
         mesh = ExecutionMesh(
             [ExecutionTask("deep", "deep", required_capabilities=("reasoning",))],
-            lease_seconds=0.05,
+            lease_seconds=0.25,
         )
         store.ensure_run("run-heartbeat", mesh)
         session.commit()
@@ -196,14 +196,14 @@ def test_heartbeat_keeps_long_specialist_execution_alive(tmp_path):
             "slow-specialist",
             {"reasoning"},
             {"reasoning": 1.0},
-            delay=0.12,
+            delay=0.45,
         )
         result = asyncio.run(
             DurableFederatedExecutor(
                 store,
                 "run-heartbeat",
-                lease_seconds=0.05,
-                heartbeat_interval=0.01,
+                lease_seconds=0.25,
+                heartbeat_interval=0.05,
             ).run_to_completion([slow])
         )
         assert result["succeeded"] == ["deep"]
