@@ -1,0 +1,66 @@
+{
+  "schema": "glaciereq.echo.source-counterengineering.v1",
+  "date_hst": "2026-08-15",
+  "objective": "extract execution mechanics from frontier primary sources and recombine them into stronger provider-neutral APEX execution",
+  "sources": [
+    {
+      "source": "https://openai.com/index/the-next-evolution-of-the-agents-sdk/",
+      "family": "OpenAI Agents SDK",
+      "mechanics_extracted": [
+        "separate orchestration harness from compute environment",
+        "isolated execution workspaces",
+        "saved state and resumable execution",
+        "specialist delegation and nested execution"
+      ]
+    },
+    {
+      "source": "https://openai.github.io/openai-agents-python/running_agents/",
+      "family": "OpenAI Agents SDK runtime",
+      "mechanics_extracted": [
+        "runtime-owned tool dispatch",
+        "bounded local tool concurrency",
+        "run-level tracing identity",
+        "pre-execution validation hooks"
+      ]
+    },
+    {
+      "source": "https://bytecodealliance.org/articles/WASI-0.3",
+      "family": "WASI 0.3",
+      "mechanics_extracted": [
+        "host-owned async scheduling across components",
+        "typed async composition across language boundaries",
+        "stream data separated from independent terminal completion",
+        "direct in-process service chaining instead of mandatory network hops"
+      ]
+    },
+    {
+      "source": "https://bytecodealliance.org/articles/wasmtime-gc",
+      "family": "Wasmtime 47",
+      "mechanics_extracted": [
+        "cheap disposable isolated instances",
+        "horizontal scaling across many short-lived execution units",
+        "runtime-enforced memory isolation",
+        "broader high-level-language portability"
+      ]
+    }
+  ],
+  "recombined_execution_model": [
+    "deterministic dependency DAG scheduling",
+    "bounded parallel execution waves",
+    "capability-routed detachable workers",
+    "per-task workspace identity",
+    "worker leases with stale-worker recovery",
+    "hard resource envelopes without minimizing ambition",
+    "failure-domain isolation so independent branches continue",
+    "dependency output and terminal-state chaining",
+    "stream payload separated from terminal completion",
+    "hash-chained execution receipts",
+    "digest-protected snapshot and rehydration across worker/session replacement"
+  ],
+  "implementation": {
+    "module": "echo/execution_mesh.py",
+    "tests": "tests/test_execution_mesh.py",
+    "status": "IMPLEMENTED_PENDING_NATIVE_CI"
+  },
+  "next_boundary": "bind persistent transactional lease storage and add Wasmtime/WASI and model-agent worker adapters behind WorkerBackend"
+}
