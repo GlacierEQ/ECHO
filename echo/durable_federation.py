@@ -18,7 +18,6 @@ from typing import Any, Mapping, Sequence
 
 from echo.durable_execution import (
     DurableExecutionStore,
-    DurableTaskORM,
     LeaseToken,
     StaleLeaseError,
 )
@@ -225,7 +224,6 @@ class DurableFederatedExecutor:
                 )
             )
 
-        # Ownership must be durable before external compute begins.
         self.store.session.commit()
         return tuple(claimed)
 
@@ -240,7 +238,7 @@ class DurableFederatedExecutor:
             )
             ExecutionMesh._validate_result(assignment.task, result)
             return result
-        except Exception as exc:  # isolate one worker/task failure from siblings
+        except Exception as exc:
             return exc
 
     def _heartbeat(
@@ -248,7 +246,6 @@ class DurableFederatedExecutor:
         assignments: Sequence[DurableAssignment],
         pending_task_ids: set[str],
     ) -> set[str]:
-        """Renew live assignments and return task IDs whose ownership was lost."""
         lost: set[str] = set()
         now = utcnow()
         for assignment in assignments:
@@ -383,8 +380,6 @@ class DurableFederatedExecutor:
                     self.store.session.rollback()
             raise
 
-        # Rebuild from persisted state so the checkpoint contains the database
-        # receipt chain and any durable blocked/failure propagation.
         restored = self.store.restore_mesh(self.run_id)
         self.store.save_snapshot(self.run_id, restored.snapshot(), commit=True)
         return tuple(outcomes)
