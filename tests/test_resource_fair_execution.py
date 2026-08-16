@@ -9,7 +9,7 @@ from echo.db import init_db
 from echo.durable_execution import DurableEventORM, DurableExecutionStore
 from echo.execution_mesh import ExecutionMesh, ExecutionTask, WorkerResult
 from echo.resource_fair_execution import ResourceFairDurableExecutor
-from echo.resource_scheduler import ResourceFairScheduler, SchedulingIntent, schedule_task
+from echo.resource_scheduler import SchedulingIntent, schedule_task
 
 
 class Worker:
