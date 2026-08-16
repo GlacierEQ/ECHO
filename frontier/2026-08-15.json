@@ -4,6 +4,17 @@
   "operator_objective": "maximum coherent advance",
   "sources": [
     {
+      "technology": "GPT-5.6 Sol Ultrafast",
+      "published_at": "2026-08-13",
+      "maturity": "preview",
+      "primary_source": "https://openai.com/index/previewing-ultrafast/",
+      "signal": "OpenAI reports a limited-preview service tier for GPT-5.6 Sol running up to 14x faster than Standard processing and up to 750 output tokens per second on Cerebras, targeting time-sensitive incident response, research, support, and other interactive workflows.",
+      "target_boundaries": ["low_latency_agent_execution", "incident_response", "interactive_research", "human_in_the_loop_iteration"],
+      "disposition": "HOLD_WITH_REASON",
+      "reason": "Ultrafast is limited to a select preview group and this repository has no verified entitlement or same-workload latency receipt. Do not fabricate access or infer the provider's benchmark on GlacierEQ workloads.",
+      "next_measurement": "When access is observed, benchmark the same long-horizon tool workload under Standard and Ultrafast for wall-clock latency, success rate, tool-round count, output-token rate, and total cost; promote only if the measured APEX gain survives the workload-specific comparison."
+    },
+    {
       "technology": "OpenAI Agents SDK",
       "published_at": "2026-04-15",
       "maturity": "stable",
