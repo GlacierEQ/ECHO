@@ -167,7 +167,7 @@ class DurableEventORM(Base):
 
 
 class DurableReceiptORM(Base):
-    __tablename__ = "execution_receipts"
+    __tablename__ = "execution_mesh_receipts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(
