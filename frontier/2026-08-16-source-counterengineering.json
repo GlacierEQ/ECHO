@@ -1,0 +1,96 @@
+{
+  "schema": "glaciereq.echo.source-counterengineering-cycle.v1",
+  "date": "2026-08-16",
+  "operator": "Casey Barton",
+  "apex_objective": "maximum coherent advance",
+  "before_head": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923",
+  "identity_repair_head": "089d48cbd9b6454c5a63053c708dd9cdc3d8be5a",
+  "sources": [
+    {
+      "id": "mcp-2026-07-28",
+      "source_url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/",
+      "published_at": "2026-07-28",
+      "source_type": "official_specification_release",
+      "mechanics_digest_sha256": "ff1af8e413c8f1eb56f7e911a5c78d61fbc2a6e9dd7a60633e84c4ada93d3ff3",
+      "transferable_mechanics": [
+        "stateless request/response core",
+        "self-describing requests",
+        "header-visible routing identity",
+        "multi-round-trip continuation instead of sticky bidirectional streams",
+        "deterministic cacheable catalogs"
+      ],
+      "surface_api_excluded": true,
+      "recombined_with": [
+        "ECHO durable lease epochs",
+        "ECHO stale-worker fencing",
+        "ECHO heterogeneous specialist routing",
+        "ECHO deterministic receipts"
+      ],
+      "candidate": "portable stateless execution envelopes with lease-fenced continuation and deterministic worker-catalog cache hints",
+      "disposition": "IMPLEMENTED"
+    },
+    {
+      "id": "openai-agents-sdk-0.8.0",
+      "source_url": "https://openai.github.io/openai-agents-python/release/",
+      "source_type": "official_release_changelog",
+      "mechanics_digest_sha256": "51183bb4ec41d4fbc715f49fddd6ce7f9713c213d26da58de3a33d7fe98a2ee9",
+      "transferable_mechanics": [
+        "blocking synchronous tool work moved off the event loop onto worker threads",
+        "tool-local failure semantics can return structured model-visible errors instead of collapsing a whole run",
+        "runtime sessions and tracing remain separable primitives"
+      ],
+      "candidate": "thread-offload adapter for blocking ECHO tool backends",
+      "disposition": "HOLD_WITH_REASON",
+      "reason": "ECHO already executes detachable asynchronous WorkerBackend boundaries; no event-loop blocking regression is established. Add only after profiling identifies a real blocking backend."
+    },
+    {
+      "id": "postgresql-18-aio",
+      "source_url": "https://www.postgresql.org/about/news/postgresql-18-released-3142/",
+      "published_at": "2025-09-25",
+      "source_type": "official_release",
+      "mechanics_digest_sha256": "9922b653d3038c623bf1c05f72a8cd2a9a50431dae5f1461e5fc7aa28ca48145",
+      "transferable_mechanics": [
+        "database-aware concurrent I/O submission",
+        "latency hiding through queued reads",
+        "selectable worker/io_uring execution methods",
+        "explicit I/O observability"
+      ],
+      "candidate": "prefetched durable-state restoration and batched checkpoint read path",
+      "disposition": "HOLD_WITH_REASON",
+      "reason": "No ECHO restore/checkpoint I/O bottleneck has yet been benchmarked. Performance claims require a measured baseline before changing the persistence path."
+    },
+    {
+      "id": "wasmtime-45",
+      "source_url": "https://github.com/bytecodealliance/wasmtime/releases/tag/v45.0.0",
+      "published_at": "2026-05-21",
+      "source_type": "official_source_release",
+      "mechanics_digest_sha256": "fef9155e660bc842e79ac7c203b549ce8371d50af5488323b5790f3c1310b742",
+      "transferable_mechanics": [
+        "component-boundary isolation",
+        "asynchronous component invocation",
+        "runtime reflection over compiled component interfaces",
+        "explicit OOM handling across runtime APIs"
+      ],
+      "candidate": "Wasm component worker backend for hostile or polyglot specialist execution",
+      "disposition": "HOLD_WITH_REASON",
+      "reason": "Promising isolation boundary, but language/runtime adoption must beat the current worker boundary on measurable isolation, startup, portability, and integration cost. Route to Tower boundary-fitness experiment before estate adoption."
+    }
+  ],
+  "implemented_files": [
+    "echo/stateless_dispatch.py",
+    "tests/test_stateless_dispatch.py"
+  ],
+  "verification_intent": [
+    "compile",
+    "ruff F-class correctness",
+    "full pytest suite",
+    "CLI verify",
+    "adversarial stale-continuation rejection",
+    "deterministic catalog ordering",
+    "capability and worker mismatch rejection"
+  ],
+  "rollback": {
+    "baseline_head": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923",
+    "identity_repair_parent": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923"
+  }
+}
