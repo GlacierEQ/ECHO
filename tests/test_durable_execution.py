@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from echo.db import get_session, init_db
 from echo.durable_execution import (
     DurableEventORM,
     DurableExecutionStore,
+    DurableReceiptORM,
     DurableRunORM,
     DurableTaskORM,
     StaleLeaseError,
@@ -156,7 +159,6 @@ def test_snapshot_plus_task_overlay_survives_crash_between_task_commit_and_check
     )
     assert lease is not None
     store.complete(lease, result("persisted-before-crash"))
-    # Deliberately do not write a second snapshot: process dies here.
 
     restored = store.restore_mesh("run-crash")
     assert restored.runtime["research"].state == TaskState.SUCCEEDED
@@ -238,6 +240,95 @@ def test_expired_final_attempt_fails_instead_of_requeueing_forever(store):
     )
     assert row.status == TaskState.FAILED.value
     assert store.session.get(DurableRunORM, "run-expired").status == "failed"
+
+
+def test_rich_payloads_use_same_deterministic_persistence_representation(store):
+    identifier = uuid4()
+    observed_at = datetime(2026, 8, 16, 7, 9, tzinfo=timezone.utc)
+    execution = ExecutionMesh(
+        [
+            ExecutionTask(
+                "rich",
+                "run",
+                payload={"id": identifier, "observed_at": observed_at},
+            )
+        ]
+    )
+    store.ensure_run("run-rich", execution)
+    store.session.flush()
+    row = store.session.scalar(
+        select(DurableTaskORM).where(DurableTaskORM.run_id == "run-rich")
+    )
+    assert row.definition["payload"] == {
+        "id": str(identifier),
+        "observed_at": str(observed_at),
+    }
+    UUID(row.definition["payload"]["id"])
+    store.ensure_run("run-rich", execution)
+
+
+def test_restore_without_snapshot_preserves_mesh_scheduling_settings(store):
+    execution = ExecutionMesh(
+        [ExecutionTask("a", "run")],
+        max_concurrency=37,
+        lease_seconds=987.5,
+    )
+    store.ensure_run("run-settings", execution)
+    restored = store.restore_mesh("run-settings")
+    assert restored.max_concurrency == 37
+    assert restored.lease_seconds == 987.5
+
+
+def test_post_snapshot_task_receipt_survives_restore_and_next_checkpoint(store):
+    execution = mesh()
+    store.ensure_run("run-receipts", execution)
+    store.save_snapshot("run-receipts", execution.snapshot())
+    lease = store.claim_next(
+        "run-receipts", "reasoning-worker", frozenset({"reasoning"})
+    )
+    assert lease is not None
+    store.complete(lease, result("post-snapshot"))
+
+    restored = store.restore_mesh("run-receipts")
+    assert len(restored.receipts) == 1
+    first_head = restored.receipts[-1].content_hash
+    store.save_snapshot("run-receipts", restored.snapshot())
+    restored_again = store.restore_mesh("run-receipts")
+    assert restored_again.receipts[-1].content_hash == first_head
+    assert store.session.scalar(
+        select(DurableRunORM).where(DurableRunORM.run_id == "run-receipts")
+    ).mesh_receipt_head == first_head
+    assert store.session.scalar(
+        select(DurableReceiptORM).where(DurableReceiptORM.run_id == "run-receipts")
+    ).content_hash == first_head
+
+
+def test_sqlite_stale_reader_cannot_claim_already_reserved_task(tmp_path):
+    engine = init_db(tmp_path / "claim-cas.db")
+    session_one = Session(bind=engine, autoflush=False, expire_on_commit=False)
+    session_two = Session(bind=engine, autoflush=False, expire_on_commit=False)
+    try:
+        first_store = DurableExecutionStore(session_one)
+        second_store = DurableExecutionStore(session_two)
+        first_store.ensure_run("run-cas", ExecutionMesh([ExecutionTask("a", "run")]))
+        session_one.commit()
+
+        stale = session_two.scalar(
+            select(DurableTaskORM).where(DurableTaskORM.run_id == "run-cas")
+        )
+        assert stale.status == TaskState.PENDING.value
+        assert stale.attempts == 0
+
+        first = first_store.claim_next("run-cas", "worker-a", frozenset())
+        assert first is not None
+        session_one.commit()
+
+        second = second_store.claim_next("run-cas", "worker-b", frozenset())
+        assert second is None
+        session_two.rollback()
+    finally:
+        session_one.close()
+        session_two.close()
 
 
 def test_postgres_claim_contract_contains_skip_locked():
