@@ -5,6 +5,8 @@
   "apex_objective": "maximum coherent advance",
   "before_head": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923",
   "identity_repair_head": "089d48cbd9b6454c5a63053c708dd9cdc3d8be5a",
+  "implementation_head": "81fdff4ca6eea444c5c917b4479cf931dbcd8674",
+  "package_identity_head": "31314fca3e548a622c906f450eb88696886dbd47",
   "sources": [
     {
       "id": "mcp-2026-07-28",
@@ -78,19 +80,49 @@
   ],
   "implemented_files": [
     "echo/stateless_dispatch.py",
-    "tests/test_stateless_dispatch.py"
+    "tests/test_stateless_dispatch.py",
+    "echo/__init__.py",
+    "pyproject.toml"
   ],
-  "verification_intent": [
-    "compile",
-    "ruff F-class correctness",
-    "full pytest suite",
-    "CLI verify",
-    "adversarial stale-continuation rejection",
-    "deterministic catalog ordering",
-    "capability and worker mismatch rejection"
+  "implemented_mechanics": [
+    "self-describing portable execution envelope",
+    "stable transport-independent dispatch key",
+    "header-visible operation and lease routing metadata",
+    "deterministic cacheable worker capability catalog",
+    "lease-epoch-fenced multi-round-trip continuation",
+    "wave serialization without coordinator-affine execution state"
   ],
+  "verification": {
+    "implementation_ci_run": 31964753719,
+    "implementation_ci_head": "81fdff4ca6eea444c5c917b4479cf931dbcd8674",
+    "conclusion": "success",
+    "compile": "PASS",
+    "ruff_f_correctness": "PASS",
+    "dependency_audit": "PASS_NO_KNOWN_VULNERABILITIES",
+    "pytest": {
+      "passed": 99,
+      "failed": 0,
+      "warning_count": 1
+    },
+    "cli_verify": "VERIFIED",
+    "adversarial_cases": [
+      "stale continuation rejected after lease epoch replacement",
+      "worker identity mismatch rejected",
+      "insufficient worker capability rejected",
+      "worker catalog deterministic across input order",
+      "dispatch wave preserves independent lease fencing"
+    ]
+  },
+  "deployment_projection": {
+    "workflow_run": 31964753664,
+    "conclusion": "BLOCKED_BY_EXPLICIT_CONFIGURATION",
+    "blocker": "No external deployment specification or DEPLOY_COMMAND is configured for a main push; workflow intentionally refuses to represent an ephemeral runner-local container as production deployment.",
+    "implementation_regression": false
+  },
   "rollback": {
     "baseline_head": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923",
-    "identity_repair_parent": "4ea6fc9ee28f0414e2832c427cb20f10c22e4923"
+    "implementation_parent": "089d48cbd9b6454c5a63053c708dd9cdc3d8be5a",
+    "package_identity_parent": "81fdff4ca6eea444c5c917b4479cf931dbcd8674",
+    "strategy": "revert the receipt/package-identity/implementation/identity-repair commits in reverse order if a later exact-head regression is demonstrated"
   }
 }
