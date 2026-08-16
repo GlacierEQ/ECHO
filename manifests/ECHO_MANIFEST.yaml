@@ -1,11 +1,11 @@
 # ECHO — Engine for Continuity, History, and Orchestration
 # Machine-readable paired-system runtime manifest
-# Version: 0.1.0
+# Version: 0.2.0
 
 identity:
   name: ECHO
   full_name: Engine for Continuity, History, and Orchestration
-  version: "0.1.0"
+  version: "0.2.0"
   role: piston
   pillar: AKOS
   repository: GlacierEQ/ECHO
@@ -16,6 +16,7 @@ relationship:
   description: |
     AKOS answers: "What is correct?"
     ECHO answers:  "How do we keep it moving correctly?"
+    The operator defines the objective and intended meaning.
   akos_governs:
     - identity
     - truth
@@ -26,6 +27,8 @@ relationship:
     - maturity
     - promotion
     - completion_truth
+    - maximum_coherent_advance
+    - ceiling_first_counterengineering
   echo_operates:
     - continuity
     - history
@@ -36,8 +39,10 @@ relationship:
     - execution_flow
     - retries
     - operational_receipts
+    - recovery_obligation_continuity
+    - ceiling_floor_separation_across_sessions
 
-canonical_cycle:
+operating_cycle:
   - REMEMBER
   - RECONCILE
   - AUTHORIZE
@@ -51,12 +56,33 @@ canonical_cycle:
   - IMPROVE
   - REPEAT
 
+counterengineering_continuity:
+  orientation: CEILING_FIRST
+  job_type: echo.counterengineering.continuity
+  target_rule: preserve_operator_defined_target
+  floor_rule: current_state_measures_gap_not_ceiling
+  local_block_rule: LOCAL_UNLESS_PROVEN_GLOBAL
+  contraction_recovery:
+    - preserve_displaced_capability
+    - preserve_lineage_sources
+    - preserve_verified_strengths
+    - preserve_real_constraints
+    - preserve_compatible_later_gains
+    - preserve_verification_obligations
+    - preserve_surpass_opportunities
+  postures:
+    - ADVANCE_FROM_CEILING
+    - RESTORE_AND_RECOMPUTE_CEILING
+    - RESTORE_AND_SURPASS
+
 self_evolution:
   loop: |
-    ECHO OBSERVES
-    → AKOS GOVERNS
-    → ECHO IMPROVES
-    → AKOS VERIFIES
+    OPERATOR DIRECTS
+    → ECHO PRESERVES TARGET + OPEN OBLIGATIONS
+    → AKOS GOVERNS THE MAXIMUM COHERENT ADVANCE
+    → ECHO ROUTES AND PERSISTS EXECUTION
+    → AKOS VERIFIES CLAIM STATE
+    → ECHO CARRIES THE NEXT CEILING FRONTIER FORWARD
 
 capabilities:
   - FastAPI REST service
@@ -71,6 +97,8 @@ capabilities:
   - idempotent orchestration jobs
   - bounded retries and failure states
   - execution receipts
+  - ceiling-first counterengineering continuity receipts
+  - recovery-and-surpass obligation persistence
   - runtime health and statistics
   - self-evolution recommendations
   - Docker + Compose
@@ -78,6 +106,7 @@ capabilities:
   - GitHub Actions CI
 
 verification:
-  behavioral_tests: 3
-  expected_result: VERIFIED
+  repository_native_behavioral_tests: required
+  counterengineering_continuity_tests: required
+  expected_result_for_promotion: VERIFIED
   python_compilation: required
