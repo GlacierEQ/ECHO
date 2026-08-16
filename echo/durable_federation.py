@@ -18,6 +18,7 @@ from typing import Any, Mapping, Sequence
 
 from echo.durable_execution import (
     DurableExecutionStore,
+    DurableRunORM,
     LeaseToken,
     StaleLeaseError,
 )
@@ -76,11 +77,15 @@ class DurableFederatedExecutor:
     ) -> None:
         self.store = store
         self.run_id = run_id
-        run = store._lock_run(run_id)
-        self.lease_seconds = float(lease_seconds or run.lease_seconds)
+        run = store.session.get(DurableRunORM, run_id)
+        if run is None:
+            raise ValueError(f"durable run not found: {run_id}")
+        self.lease_seconds = float(
+            run.lease_seconds if lease_seconds is None else lease_seconds
+        )
         if self.lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
-        default_heartbeat = max(0.05, self.lease_seconds / 3.0)
+        default_heartbeat = self.lease_seconds / 3.0
         self.heartbeat_interval = float(
             heartbeat_interval if heartbeat_interval is not None else default_heartbeat
         )
@@ -94,17 +99,11 @@ class DurableFederatedExecutor:
         task: ExecutionTask,
         backend: WorkerBackend,
         *,
-        now: datetime,
+        now: datetime | None = None,
     ) -> tuple[LeaseToken, int] | None:
-        """Atomically claim the task selected by federation planning.
-
-        The durable store intentionally exposes generic queue claiming; this
-        integration needs exact-task claiming so a broad-capability generalist
-        cannot steal work that planning assigned to a measurably better
-        specialist. The same PostgreSQL lock / SQLite compare-and-swap
-        primitives are reused here rather than creating a second ownership path.
-        """
-        self.store.recover_expired(self.run_id, now=now)
+        """Atomically claim the exact task selected by specialist planning."""
+        observation_time = _aware(now or utcnow())
+        self.store.recover_expired(self.run_id, now=observation_time)
         rows = self.store._task_rows(self.run_id)
         by_id = {row.task_id: row for row in rows}
         candidate = by_id.get(task.task_id)
@@ -136,7 +135,8 @@ class DurableFederatedExecutor:
         if row.attempts >= int(row.definition.get("max_attempts", 1)):
             return None
 
-        expires_at = now + timedelta(seconds=self.lease_seconds)
+        claim_now = _aware(now or utcnow())
+        expires_at = claim_now + timedelta(seconds=self.lease_seconds)
         if dialect == "sqlite":
             row = self.store._claim_sqlite(
                 row,
@@ -183,48 +183,49 @@ class DurableFederatedExecutor:
         now: datetime | None = None,
     ) -> tuple[DurableAssignment, ...]:
         """Restore current state, choose specialists, and durably reserve a wave."""
-        now = _aware(now or utcnow())
         mesh = self.store.restore_mesh(self.run_id)
         planned = FederatedExecutor(mesh).plan_wave(backends)
         claimed: list[DurableAssignment] = []
-
-        for assignment in planned:
-            claimed_state = self._claim_exact(
-                assignment.task,
-                assignment.backend,
-                now=now,
-            )
-            if claimed_state is None:
-                continue
-            token, attempt = claimed_state
-            self.store.mark_running(token, now=now)
-            context = ExecutionContext(
-                workspace_id=(
-                    assignment.task.workspace_id
-                    or f"echo:{assignment.task.task_id}"
-                ),
-                dependency_outputs={
-                    dependency: mesh.results[dependency].output
-                    for dependency in assignment.task.dependencies
-                },
-                dependency_terminals={
-                    dependency: mesh.results[dependency].terminal
-                    for dependency in assignment.task.dependencies
-                },
-                attempt=attempt,
-            )
-            claimed.append(
-                DurableAssignment(
-                    task=assignment.task,
-                    backend=assignment.backend,
-                    token=token,
-                    attempt=attempt,
-                    fitness=assignment.fitness,
-                    context=context,
+        try:
+            for assignment in planned:
+                claimed_state = self._claim_exact(
+                    assignment.task,
+                    assignment.backend,
+                    now=now,
                 )
-            )
-
-        self.store.session.commit()
+                if claimed_state is None:
+                    continue
+                token, attempt = claimed_state
+                self.store.mark_running(token, now=_aware(now or utcnow()))
+                context = ExecutionContext(
+                    workspace_id=(
+                        assignment.task.workspace_id
+                        or f"echo:{assignment.task.task_id}"
+                    ),
+                    dependency_outputs={
+                        dependency: mesh.results[dependency].output
+                        for dependency in assignment.task.dependencies
+                    },
+                    dependency_terminals={
+                        dependency: mesh.results[dependency].terminal
+                        for dependency in assignment.task.dependencies
+                    },
+                    attempt=attempt,
+                )
+                claimed.append(
+                    DurableAssignment(
+                        task=assignment.task,
+                        backend=assignment.backend,
+                        token=token,
+                        attempt=attempt,
+                        fitness=assignment.fitness,
+                        context=context,
+                    )
+                )
+            self.store.session.commit()
+        except Exception:
+            self.store.session.rollback()
+            raise
         return tuple(claimed)
 
     async def _compute(
@@ -247,20 +248,66 @@ class DurableFederatedExecutor:
         pending_task_ids: set[str],
     ) -> set[str]:
         lost: set[str] = set()
-        now = utcnow()
-        for assignment in assignments:
-            if assignment.task.task_id not in pending_task_ids:
+        try:
+            for assignment in assignments:
+                if assignment.task.task_id not in pending_task_ids:
+                    continue
+                try:
+                    self.store.heartbeat(
+                        assignment.token,
+                        lease_seconds=self.lease_seconds,
+                        now=utcnow(),
+                    )
+                except StaleLeaseError:
+                    lost.add(assignment.task.task_id)
+            self.store.session.commit()
+        except Exception:
+            self.store.session.rollback()
+            raise
+        return lost
+
+    @staticmethod
+    async def _cancel_tasks(
+        running: dict[str, asyncio.Task[WorkerResult | Exception]],
+        task_ids: set[str],
+    ) -> None:
+        cancelled: list[asyncio.Task[WorkerResult | Exception]] = []
+        for task_id in sorted(task_ids):
+            task = running.pop(task_id, None)
+            if task is None:
+                continue
+            task.cancel()
+            cancelled.append(task)
+        if cancelled:
+            await asyncio.gather(*cancelled, return_exceptions=True)
+
+    async def _abort_wave(
+        self,
+        assignments: Mapping[str, DurableAssignment],
+        running: dict[str, asyncio.Task[WorkerResult | Exception]],
+        *,
+        reason: str,
+        extra_task_ids: set[str] | None = None,
+    ) -> None:
+        task_ids = set(running)
+        task_ids.update(extra_task_ids or set())
+        await self._cancel_tasks(running, set(running))
+        self.store.session.rollback()
+        for task_id in sorted(task_ids):
+            assignment = assignments.get(task_id)
+            if assignment is None:
                 continue
             try:
-                self.store.heartbeat(
+                self.store.fail(
                     assignment.token,
-                    lease_seconds=self.lease_seconds,
-                    now=now,
+                    reason,
+                    retry=True,
                 )
+                self.store.session.commit()
             except StaleLeaseError:
-                lost.add(assignment.task.task_id)
-        self.store.session.commit()
-        return lost
+                self.store.session.rollback()
+            except Exception:
+                self.store.session.rollback()
 
     async def run_wave(
         self,
@@ -270,7 +317,7 @@ class DurableFederatedExecutor:
         if not assignments:
             return ()
 
-        running = {
+        running: dict[str, asyncio.Task[WorkerResult | Exception]] = {
             assignment.task.task_id: asyncio.create_task(self._compute(assignment))
             for assignment in assignments
         }
@@ -285,11 +332,22 @@ class DurableFederatedExecutor:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:
-                    lost = self._heartbeat(assignments, set(running))
+                    try:
+                        lost = self._heartbeat(assignments, set(running))
+                    except Exception as exc:
+                        await self._abort_wave(
+                            by_task,
+                            running,
+                            reason=(
+                                "heartbeat persistence failure: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        )
+                        raise RuntimeError(
+                            "durable heartbeat persistence failed; wave compute cancelled"
+                        ) from exc
+                    await self._cancel_tasks(running, lost)
                     for task_id in sorted(lost):
-                        task = running.pop(task_id, None)
-                        if task is not None:
-                            task.cancel()
                         outcomes.append(
                             DurableOutcome(
                                 task_id=task_id,
@@ -337,7 +395,9 @@ class DurableFederatedExecutor:
                                     outcome="success",
                                 )
                             )
+                        self.store.session.commit()
                     except StaleLeaseError as exc:
+                        self.store.session.rollback()
                         outcomes.append(
                             DurableOutcome(
                                 task_id=task_id,
@@ -346,14 +406,38 @@ class DurableFederatedExecutor:
                                 error=str(exc),
                             )
                         )
-                    self.store.session.commit()
+                    except Exception as exc:
+                        self.store.session.rollback()
+                        await self._abort_wave(
+                            by_task,
+                            running,
+                            reason=(
+                                "result persistence failure: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                            extra_task_ids={task_id},
+                        )
+                        raise RuntimeError(
+                            "durable result persistence failed; wave compute cancelled"
+                        ) from exc
 
                 if running:
-                    lost = self._heartbeat(assignments, set(running))
+                    try:
+                        lost = self._heartbeat(assignments, set(running))
+                    except Exception as exc:
+                        await self._abort_wave(
+                            by_task,
+                            running,
+                            reason=(
+                                "heartbeat persistence failure: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        )
+                        raise RuntimeError(
+                            "durable heartbeat persistence failed; wave compute cancelled"
+                        ) from exc
+                    await self._cancel_tasks(running, lost)
                     for task_id in sorted(lost):
-                        task = running.pop(task_id, None)
-                        if task is not None:
-                            task.cancel()
                         outcomes.append(
                             DurableOutcome(
                                 task_id=task_id,
@@ -363,21 +447,11 @@ class DurableFederatedExecutor:
                             )
                         )
         except asyncio.CancelledError:
-            for task in running.values():
-                task.cancel()
-            await asyncio.gather(*running.values(), return_exceptions=True)
-            for task_id, assignment in by_task.items():
-                if task_id not in running:
-                    continue
-                try:
-                    self.store.fail(
-                        assignment.token,
-                        "CancelledError: durable federated wave cancelled",
-                        retry=True,
-                    )
-                    self.store.session.commit()
-                except StaleLeaseError:
-                    self.store.session.rollback()
+            await self._abort_wave(
+                by_task,
+                running,
+                reason="CancelledError: durable federated wave cancelled",
+            )
             raise
 
         restored = self.store.restore_mesh(self.run_id)
@@ -389,14 +463,14 @@ class DurableFederatedExecutor:
         backends: Sequence[WorkerBackend],
     ) -> Mapping[str, Any]:
         waves = 0
-        assignments = 0
+        assignment_count = 0
         outcomes: list[DurableOutcome] = []
         while True:
             wave = await self.run_wave(backends)
             if not wave:
                 break
             waves += 1
-            assignments += len(wave)
+            assignment_count += len(wave)
             outcomes.extend(wave)
 
         mesh = self.store.restore_mesh(self.run_id)
@@ -420,7 +494,7 @@ class DurableFederatedExecutor:
         return {
             "schema": "glaciereq.echo.durable-federated-execution-run.v1",
             "waves": waves,
-            "assignments": assignments,
+            "assignments": assignment_count,
             "workers": sorted(backend.worker_id for backend in backends),
             "succeeded": sorted(
                 task_id
