@@ -45,12 +45,23 @@ jobs:
       - name: Resolve specification
         id: spec
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_SPEC: ${{ inputs.deploy_spec_json || github.event.client_payload.deploy_spec_json || '' }}
           PAYLOAD_DEPLOY: ${{ github.event.client_payload.deploy_command || '' }}
           PAYLOAD_ROLLBACK: ${{ github.event.client_payload.rollback_command || '' }}
           PAYLOAD_HEALTH: ${{ github.event.client_payload.health_url || '' }}
+          SECRET_DEPLOY: ${{ secrets.DEPLOY_COMMAND || '' }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] \
+            && [ -z "${INPUT_SPEC}" ] \
+            && [ -z "${PAYLOAD_DEPLOY}" ] \
+            && [ -z "${SECRET_DEPLOY}" ] \
+            && [ ! -f deploy.spec.json ]; then
+            echo "::error::No external deployment specification or DEPLOY_COMMAND is configured for a main push."
+            echo "Refusing to treat an ephemeral runner-local container as a production deployment."
+            exit 78
+          fi
           if [ -n "${INPUT_SPEC}" ]; then
             echo "DEPLOY_SPEC_JSON<<EOF" >> "$GITHUB_ENV"
             echo "${INPUT_SPEC}" >> "$GITHUB_ENV"
