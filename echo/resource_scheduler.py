@@ -102,21 +102,21 @@ class SchedulingIntent:
             raw = {}
         if not isinstance(raw, Mapping):
             raise ValueError(f"{SCHEDULING_KEY} must be an object")
+        resources = raw.get("resources", {})
+        topology = raw.get("topology", {})
+        if not isinstance(resources, Mapping):
+            raise ValueError("scheduling resources must be an object")
+        if not isinstance(topology, Mapping):
+            raise ValueError("scheduling topology must be an object")
         intent = cls(
             fairness_key=str(raw.get("fairness_key", "default")),
             fairness_weight=float(raw.get("fairness_weight", 1.0)),
             seats=int(raw.get("seats", 1)),
-            resources={
-                str(key): float(value)
-                for key, value in dict(raw.get("resources", {})).items()
-            },
+            resources={str(key): float(value) for key, value in resources.items()},
             placement_group=str(raw.get("placement_group", "")),
             placement_strategy=str(raw.get("placement_strategy", "none")),
             gang=bool(raw.get("gang", False)),
-            topology={
-                str(key): str(value)
-                for key, value in dict(raw.get("topology", {})).items()
-            },
+            topology={str(key): str(value) for key, value in topology.items()},
             required_worker_version=str(raw.get("required_worker_version", "")),
         )
         intent.validate()
@@ -136,6 +136,7 @@ def schedule_task(task: ExecutionTask, intent: SchedulingIntent) -> ExecutionTas
 class WorkerRuntimeProfile:
     worker_id: str
     resources: Mapping[str, float]
+    used_resources: Mapping[str, float]
     topology: Mapping[str, str]
     version: str
     draining: bool
@@ -145,17 +146,37 @@ class WorkerRuntimeProfile:
     @classmethod
     def from_backend(cls, backend: WorkerBackend) -> "WorkerRuntimeProfile":
         raw_resources = getattr(backend, "resources", {})
+        raw_used = getattr(backend, "used_resources", {})
+        raw_topology = getattr(backend, "topology", {})
         if not isinstance(raw_resources, Mapping):
             raise ValueError(f"worker {backend.worker_id} resources must be a mapping")
+        if not isinstance(raw_used, Mapping):
+            raise ValueError(
+                f"worker {backend.worker_id} used_resources must be a mapping"
+            )
+        if not isinstance(raw_topology, Mapping):
+            raise ValueError(f"worker {backend.worker_id} topology must be a mapping")
         resources = {
             str(key): _finite_nonnegative(
                 f"worker {backend.worker_id} resource {key}", float(value)
             )
             for key, value in raw_resources.items()
         }
-        raw_topology = getattr(backend, "topology", {})
-        if not isinstance(raw_topology, Mapping):
-            raise ValueError(f"worker {backend.worker_id} topology must be a mapping")
+        used = {
+            str(key): _finite_nonnegative(
+                f"worker {backend.worker_id} used resource {key}", float(value)
+            )
+            for key, value in raw_used.items()
+        }
+        for name, amount in used.items():
+            if name not in resources:
+                raise ValueError(
+                    f"worker {backend.worker_id} uses undeclared resource {name}"
+                )
+            if amount > resources[name] + 1e-12:
+                raise ValueError(
+                    f"worker {backend.worker_id} used {name} exceeds capacity"
+                )
         inflight = int(getattr(backend, "inflight", 0))
         if inflight < 0:
             raise ValueError(f"worker {backend.worker_id} inflight must be non-negative")
@@ -168,6 +189,7 @@ class WorkerRuntimeProfile:
         return cls(
             worker_id=backend.worker_id,
             resources=resources,
+            used_resources=used,
             topology={str(key): str(value) for key, value in raw_topology.items()},
             version=str(getattr(backend, "worker_version", "")),
             draining=bool(getattr(backend, "draining", False)),
@@ -207,12 +229,12 @@ class SchedulingDecision:
 
 
 class ResourceFairScheduler:
-    """Stateless-replayable weighted fair resource scheduler.
+    """Replayable weighted-fair resource scheduler.
 
-    Fairness is derived from durable task progress, not an in-memory deficit
-    counter. A replacement process therefore reconstructs the same service debt
-    from the task graph and current states. Lower normalized service receives
-    the next scheduling opportunity; priority orders work inside a flow.
+    Fairness is reconstructed from durable attempt counts rather than an
+    in-memory deficit counter. A replacement process therefore retains service
+    history including retries. Lower normalized service receives the next
+    scheduling opportunity; priority orders work inside a flow.
     """
 
     def __init__(
@@ -229,26 +251,41 @@ class ResourceFairScheduler:
                 raise ValueError(f"fairness backpressure for {key} must be positive")
 
     @staticmethod
-    def _service(mesh: ExecutionMesh) -> dict[str, float]:
+    def _fairness_weights(mesh: ExecutionMesh) -> dict[str, float]:
+        observed: dict[str, set[float]] = {}
+        for task in mesh.tasks.values():
+            intent = SchedulingIntent.from_task(task)
+            observed.setdefault(intent.fairness_key, set()).add(intent.fairness_weight)
+        conflicts = {
+            key: sorted(values)
+            for key, values in observed.items()
+            if len(values) > 1
+        }
+        if conflicts:
+            raise ValueError(
+                "fairness_weight must be consistent within each fairness_key: "
+                f"{conflicts}"
+            )
+        return {key: next(iter(values)) for key, values in observed.items()}
+
+    @classmethod
+    def _service(
+        cls,
+        mesh: ExecutionMesh,
+        weights: Mapping[str, float],
+    ) -> dict[str, float]:
         served: dict[str, float] = {}
-        weights: dict[str, float] = {}
         for task_id, task in mesh.tasks.items():
             intent = SchedulingIntent.from_task(task)
-            weights[intent.fairness_key] = intent.fairness_weight
-            state = mesh.runtime[task_id].state
-            if state in {
-                TaskState.LEASED,
-                TaskState.RUNNING,
-                TaskState.SUCCEEDED,
-                TaskState.FAILED,
-            }:
+            attempts = mesh.runtime[task_id].attempts
+            if attempts:
                 served[intent.fairness_key] = (
-                    served.get(intent.fairness_key, 0.0) + intent.seats
+                    served.get(intent.fairness_key, 0.0)
+                    + attempts * intent.seats
                 )
-        keys = set(weights) | set(served)
         return {
-            key: served.get(key, 0.0) / weights.get(key, 1.0)
-            for key in keys
+            key: served.get(key, 0.0) / weight
+            for key, weight in weights.items()
         }
 
     @staticmethod
@@ -262,26 +299,38 @@ class ResourceFairScheduler:
         return active
 
     @staticmethod
-    def _resource_fits(
+    def _resource_fits_total(
+        profile: WorkerRuntimeProfile,
+        intent: SchedulingIntent,
+    ) -> bool:
+        return all(
+            name in profile.resources and amount <= profile.resources[name] + 1e-12
+            for name, amount in intent.resources.items()
+        )
+
+    @classmethod
+    def _resource_fits_available(
+        cls,
         profile: WorkerRuntimeProfile,
         intent: SchedulingIntent,
         used: Mapping[str, float],
     ) -> bool:
-        for name, amount in intent.resources.items():
-            # Declaring a resource request requires the worker to expose that
-            # capacity explicitly. Missing capacity is not treated as infinite.
-            if name not in profile.resources:
-                return False
-            if used.get(name, 0.0) + amount > profile.resources[name] + 1e-12:
-                return False
-        return True
+        if not cls._resource_fits_total(profile, intent):
+            return False
+        return all(
+            used.get(name, 0.0) + amount <= profile.resources[name] + 1e-12
+            for name, amount in intent.resources.items()
+        )
 
     @staticmethod
     def _topology_fits(
         profile: WorkerRuntimeProfile,
         intent: SchedulingIntent,
     ) -> bool:
-        return all(profile.topology.get(key) == value for key, value in intent.topology.items())
+        return all(
+            profile.topology.get(key) == value
+            for key, value in intent.topology.items()
+        )
 
     @staticmethod
     def _version_fits(profile: WorkerRuntimeProfile, intent: SchedulingIntent) -> bool:
@@ -303,21 +352,21 @@ class ResourceFairScheduler:
     @staticmethod
     def _placement_candidates(
         candidates: Sequence[WorkerBackend],
-        profiles: Mapping[str, WorkerRuntimeProfile],
         intent: SchedulingIntent,
         state: _PlanningState,
-    ) -> list[WorkerBackend]:
+    ) -> tuple[list[WorkerBackend], bool]:
         if not intent.placement_group or intent.placement_strategy == "none":
-            return list(candidates)
+            return list(candidates), False
         previous = state.group_workers.get(intent.placement_group, [])
         if intent.placement_strategy == "pack" and previous:
             packed = [worker for worker in candidates if worker.worker_id == previous[0]]
-            return packed
+            return packed, not packed and bool(candidates)
         if intent.placement_strategy == "spread" and previous:
             unused = [worker for worker in candidates if worker.worker_id not in set(previous)]
             if unused:
-                return unused
-        return list(candidates)
+                return unused, False
+            return list(candidates), False
+        return list(candidates), False
 
     def _candidate_workers(
         self,
@@ -326,9 +375,11 @@ class ResourceFairScheduler:
         backends: Sequence[WorkerBackend],
         profiles: Mapping[str, WorkerRuntimeProfile],
         state: _PlanningState,
-    ) -> tuple[list[WorkerBackend], bool]:
-        compatible: list[WorkerBackend] = []
-        backpressure_only = False
+    ) -> tuple[list[WorkerBackend], str | None]:
+        hard_eligible: list[WorkerBackend] = []
+        total_resource_fit: list[WorkerBackend] = []
+        available_resource_fit: list[WorkerBackend] = []
+        unsaturated: list[WorkerBackend] = []
         for backend in backends:
             profile = profiles[backend.worker_id]
             if profile.draining:
@@ -339,28 +390,38 @@ class ResourceFairScheduler:
                 continue
             if not self._topology_fits(profile, intent):
                 continue
-            if not self._resource_fits(
+            hard_eligible.append(backend)
+            if not self._resource_fits_total(profile, intent):
+                continue
+            total_resource_fit.append(backend)
+            if not self._resource_fits_available(
                 profile,
                 intent,
                 state.resources_used[backend.worker_id],
             ):
                 continue
+            available_resource_fit.append(backend)
             if not self._backpressure_fits(
                 profile,
                 state.assignments[backend.worker_id],
             ):
-                backpressure_only = True
                 continue
-            compatible.append(backend)
-        return (
-            self._placement_candidates(
-                compatible,
-                profiles,
-                intent,
-                state,
-            ),
-            backpressure_only,
+            unsaturated.append(backend)
+
+        if not hard_eligible or not total_resource_fit:
+            return [], "unroutable"
+        if not available_resource_fit:
+            return [], "resource_backpressure"
+        if not unsaturated:
+            return [], "worker_backpressure"
+        placed, placement_blocked = self._placement_candidates(
+            unsaturated,
+            intent,
+            state,
         )
+        if placement_blocked:
+            return [], "placement_backpressure"
+        return placed, None if placed else "unroutable"
 
     def _assign_one(
         self,
@@ -369,19 +430,22 @@ class ResourceFairScheduler:
         backends: Sequence[WorkerBackend],
         profiles: Mapping[str, WorkerRuntimeProfile],
         state: _PlanningState,
+        *,
+        seat_limit: int,
+        active_flows: Mapping[str, int],
     ) -> tuple[WorkerAssignment | None, str | None]:
-        if state.seats_used + intent.seats > self._seat_limit:
+        if state.seats_used + intent.seats > seat_limit:
             return None, "seat_backpressure"
         flow_limit = self.max_inflight_by_fairness.get(intent.fairness_key)
         if (
             flow_limit is not None
-            and self._active_flows.get(intent.fairness_key, 0)
+            and active_flows.get(intent.fairness_key, 0)
             + state.fairness_assignments.get(intent.fairness_key, 0)
             >= flow_limit
         ):
             return None, "flow_backpressure"
 
-        candidates, worker_backpressure = self._candidate_workers(
+        candidates, reason = self._candidate_workers(
             task,
             intent,
             backends,
@@ -389,7 +453,7 @@ class ResourceFairScheduler:
             state,
         )
         if not candidates:
-            return None, "worker_backpressure" if worker_backpressure else "unroutable"
+            return None, reason or "unroutable"
 
         candidates = sorted(
             candidates,
@@ -423,32 +487,94 @@ class ResourceFairScheduler:
         )
 
     @staticmethod
-    def _gang_units(tasks: Sequence[ExecutionTask]) -> list[tuple[ExecutionTask, ...]]:
-        groups: dict[str, list[ExecutionTask]] = {}
-        singles: list[tuple[ExecutionTask, ...]] = []
-        for task in tasks:
+    def _classify_failure(
+        task_ids: Sequence[str],
+        reason: str,
+        *,
+        deferred: list[str],
+        unroutable: list[str],
+        backpressured: list[str],
+    ) -> None:
+        if reason == "unroutable":
+            unroutable.extend(task_ids)
+        elif "backpressure" in reason:
+            backpressured.extend(task_ids)
+        else:
+            deferred.extend(task_ids)
+
+    @staticmethod
+    def _ready_units(
+        mesh: ExecutionMesh,
+        ready: Sequence[ExecutionTask],
+    ) -> tuple[list[tuple[ExecutionTask, ...]], list[str]]:
+        ready_by_id = {task.task_id: task for task in ready}
+        gang_members: dict[str, list[ExecutionTask]] = {}
+        for task_id, task in mesh.tasks.items():
+            intent = SchedulingIntent.from_task(task)
+            if not intent.gang:
+                continue
+            if mesh.runtime[task_id].state == TaskState.PENDING:
+                gang_members.setdefault(intent.placement_group, []).append(task)
+
+        blocked_gangs: set[str] = set()
+        for group, members in gang_members.items():
+            if any(member.task_id not in ready_by_id for member in members):
+                blocked_gangs.add(group)
+
+        units: list[tuple[ExecutionTask, ...]] = []
+        grouped: dict[str, list[ExecutionTask]] = {}
+        deferred: list[str] = []
+        for task in ready:
             intent = SchedulingIntent.from_task(task)
             if intent.gang:
-                groups.setdefault(intent.placement_group, []).append(task)
+                if intent.placement_group in blocked_gangs:
+                    deferred.append(task.task_id)
+                    continue
+                grouped.setdefault(intent.placement_group, []).append(task)
             else:
-                singles.append((task,))
-        units = singles + [tuple(items) for _, items in sorted(groups.items())]
-        return units
+                units.append((task,))
+        units.extend(tuple(items) for _, items in sorted(grouped.items()))
+        return units, deferred
+
+    @staticmethod
+    def _unit_fairness(
+        unit: Sequence[ExecutionTask],
+    ) -> tuple[str, float, int]:
+        intents = [SchedulingIntent.from_task(task) for task in unit]
+        keys = {intent.fairness_key for intent in intents}
+        weights = {intent.fairness_weight for intent in intents}
+        if len(keys) != 1 or len(weights) != 1:
+            raise ValueError(
+                "gang members must share fairness_key and fairness_weight"
+            )
+        return (
+            intents[0].fairness_key,
+            intents[0].fairness_weight,
+            sum(intent.seats for intent in intents),
+        )
 
     def plan(
         self,
         mesh: ExecutionMesh,
         backends: Sequence[WorkerBackend],
     ) -> SchedulingDecision:
+        weights = self._fairness_weights(mesh)
+        service = self._service(mesh, weights)
+        union_capabilities = (
+            frozenset().union(*(backend.capabilities for backend in backends))
+            if backends
+            else frozenset()
+        )
+        ready = list(mesh.ready(union_capabilities))
+        units, readiness_deferred = self._ready_units(mesh, ready)
         if not backends:
-            ready = mesh.ready(frozenset())
             return SchedulingDecision(
                 assignments=(),
-                deferred=(),
-                unroutable=tuple(task.task_id for task in ready),
+                deferred=tuple(sorted(readiness_deferred)),
+                unroutable=tuple(sorted(task.task_id for task in ready)),
                 backpressured=(),
                 seats_used=0,
-                fairness_service=self._service(mesh),
+                fairness_service=service,
             )
 
         profiles = {
@@ -457,52 +583,52 @@ class ResourceFairScheduler:
         }
         if len(profiles) != len(backends):
             raise ValueError("worker_id values must be unique")
-        union_capabilities = frozenset().union(
-            *(backend.capabilities for backend in backends)
-        )
-        ready = list(mesh.ready(union_capabilities))
-        service = self._service(mesh)
-        self._active_flows = self._active_by_fairness(mesh)
-        self._seat_limit = mesh.max_concurrency
+        active_flows = self._active_by_fairness(mesh)
         state = _PlanningState(
-            resources_used={backend.worker_id: {} for backend in backends},
+            resources_used={
+                backend.worker_id: dict(profiles[backend.worker_id].used_resources)
+                for backend in backends
+            },
             assignments={backend.worker_id: 0 for backend in backends},
             group_workers={},
             fairness_assignments={},
         )
 
-        # Lower normalized service wins across flows; priority wins inside a flow.
-        ready.sort(
-            key=lambda task: (
-                service.get(SchedulingIntent.from_task(task).fairness_key, 0.0),
-                -task.priority,
-                task.task_id,
+        queues: dict[str, list[tuple[ExecutionTask, ...]]] = {}
+        unit_weights: dict[str, float] = {}
+        for unit in units:
+            key, weight, _ = self._unit_fairness(unit)
+            queues.setdefault(key, []).append(unit)
+            unit_weights[key] = weight
+        for key in queues:
+            queues[key].sort(
+                key=lambda unit: (
+                    -max(task.priority for task in unit),
+                    tuple(task.task_id for task in unit),
+                )
             )
-        )
-        units = self._gang_units(ready)
-        units.sort(
-            key=lambda unit: (
-                min(
-                    service.get(
-                        SchedulingIntent.from_task(task).fairness_key,
-                        0.0,
-                    )
-                    for task in unit
-                ),
-                -max(task.priority for task in unit),
-                tuple(task.task_id for task in unit),
-            )
-        )
 
         assignments: list[WorkerAssignment] = []
-        deferred: list[str] = []
+        deferred: list[str] = list(readiness_deferred)
         unroutable: list[str] = []
         backpressured: list[str] = []
+        planned_seats: dict[str, int] = {key: 0 for key in queues}
 
-        for unit in units:
+        while any(queues.values()):
+            available_keys = [key for key, queue in queues.items() if queue]
+            key = min(
+                available_keys,
+                key=lambda flow: (
+                    service.get(flow, 0.0)
+                    + planned_seats.get(flow, 0) / unit_weights[flow],
+                    -max(task.priority for task in queues[flow][0]),
+                    flow,
+                ),
+            )
+            unit = queues[key].pop(0)
             tentative = state.clone()
             unit_assignments: list[WorkerAssignment] = []
-            failures: list[tuple[str, str]] = []
+            failure_reason: str | None = None
             for task in unit:
                 intent = SchedulingIntent.from_task(task)
                 assignment, reason = self._assign_one(
@@ -511,39 +637,29 @@ class ResourceFairScheduler:
                     backends,
                     profiles,
                     tentative,
+                    seat_limit=mesh.max_concurrency,
+                    active_flows=active_flows,
                 )
                 if assignment is None:
-                    failures.append((task.task_id, reason or "deferred"))
-                    if SchedulingIntent.from_task(task).gang:
-                        break
-                else:
-                    unit_assignments.append(assignment)
+                    failure_reason = reason or "deferred"
+                    break
+                unit_assignments.append(assignment)
 
-            if failures and any(SchedulingIntent.from_task(task).gang for task in unit):
-                # Atomic placement group: all concurrently-ready members reserve
-                # capacity or none of them do.
-                for task in unit:
-                    reason = failures[0][1]
-                    if reason == "unroutable":
-                        unroutable.append(task.task_id)
-                    elif "backpressure" in reason:
-                        backpressured.append(task.task_id)
-                    else:
-                        deferred.append(task.task_id)
+            if failure_reason is not None:
+                self._classify_failure(
+                    [task.task_id for task in unit],
+                    failure_reason,
+                    deferred=deferred,
+                    unroutable=unroutable,
+                    backpressured=backpressured,
+                )
                 continue
 
             state = tentative
             assignments.extend(unit_assignments)
-            assigned_ids = {item.task.task_id for item in unit_assignments}
-            for task_id, reason in failures:
-                if task_id in assigned_ids:
-                    continue
-                if reason == "unroutable":
-                    unroutable.append(task_id)
-                elif "backpressure" in reason:
-                    backpressured.append(task_id)
-                else:
-                    deferred.append(task_id)
+            planned_seats[key] = planned_seats.get(key, 0) + sum(
+                SchedulingIntent.from_task(task).seats for task in unit
+            )
 
         return SchedulingDecision(
             assignments=tuple(assignments),
