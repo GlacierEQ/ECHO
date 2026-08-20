@@ -8,6 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from echo.counterengineering import build_recovery_continuity
 from echo.models import (
     ConversationIn,
     ConversationORM,
@@ -24,7 +25,12 @@ from echo.models import (
     utcnow,
 )
 
-SUPPORTED_JOBS = {"echo.ping", "echo.summarize", "echo.integrity.verify"}
+SUPPORTED_JOBS = {
+    "echo.ping",
+    "echo.summarize",
+    "echo.integrity.verify",
+    "echo.counterengineering.continuity",
+}
 
 
 class ContinuityService:
@@ -239,6 +245,8 @@ class ContinuityService:
         if job.job_type == "echo.integrity.verify":
             conv_id = str(job.payload.get("conversation_id", ""))
             return self.verify_integrity(conv_id).model_dump(mode="json")
+        if job.job_type == "echo.counterengineering.continuity":
+            return build_recovery_continuity(job.payload)
         raise ValueError(f"unsupported capability: {job.job_type}")
 
     def _write_receipt(self, job: JobORM, outcome: str, details: dict[str, Any]) -> None:
@@ -280,6 +288,7 @@ class ContinuityService:
             "pillar": "AKOS",
             "role": "piston",
             "authority_mode": "direct_access",
+            "counterengineering_continuity": "CEILING_FIRST",
         }
 
     def recommendations(self) -> list[dict[str, str]]:
@@ -287,6 +296,7 @@ class ContinuityService:
             {"area": "workers", "action": "Add transactional leases and stale-worker recovery"},
             {"area": "providers", "action": "Bind ChatGPT, Claude, Gemini, and Grok adapters behind capability contracts"},
             {"area": "observability", "action": "Publish queue, latency, integrity, and retry metrics"},
+            {"area": "counterengineering", "action": "Carry open recovery-and-surpass obligations across sessions until resolved"},
         ]
 
     def export_json(self, conv_id: str) -> dict[str, Any]:
