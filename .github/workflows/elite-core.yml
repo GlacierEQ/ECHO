@@ -1,0 +1,28 @@
+name: ECHO Elite Core Verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "echo/**"
+      - "tests/**"
+      - "scripts/**"
+      - "frontier/**"
+      - ".github/workflows/elite-core.yml"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  elite-core:
+    uses: GlacierEQ/public-actions-runner-host/.github/workflows/reusable-quick-ci.yml@a6085dae73bb80e91b845fd4a0d2f73a9c6b985a
+    with:
+      repo_name: ECHO
+      language: python
+      python_version: "3.12"
+      strict: true
+      verify_script: scripts/ci/verify_elite_core.sh
+      upload_artifacts: true
