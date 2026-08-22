@@ -1,0 +1,66 @@
+{
+  "schema": "glaciereq.echo.innovation-demo.v1",
+  "event": {
+    "title": "Portable component runtime release",
+    "technology": "Example Runtime",
+    "domain": "portable_components",
+    "source_url": "https://example.com/releases/runtime-2",
+    "published_at": "2026-08-22T00:00:00Z",
+    "maturity": "release_candidate",
+    "summary": "Adds a portable component execution surface with explicit interface boundaries.",
+    "target_boundaries": ["portable_execution", "typed_interfaces"],
+    "primary_source": true,
+    "metadata": {"fixture": true}
+  },
+  "constraints": {
+    "max_implementation_cost": 0.7,
+    "max_execution_risk": 0.4,
+    "max_time_to_proof": 0.7,
+    "minimum_evidence_confidence": 0.7,
+    "require_executable_for_action": true
+  },
+  "paths": [
+    {
+      "path_id": "implement-adapter",
+      "outcome": "implement",
+      "capability_gain": 0.95,
+      "boundary_fit": 0.92,
+      "evidence_confidence": 0.90,
+      "composability": 0.96,
+      "reversibility": 0.85,
+      "implementation_cost": 0.55,
+      "execution_risk": 0.25,
+      "time_to_proof": 0.45,
+      "evidence_refs": ["primary:release", "repo:adapter-proof"],
+      "executable_ref": "experiments/runtime_adapter.py"
+    },
+    {
+      "path_id": "bounded-experiment",
+      "outcome": "experiment",
+      "capability_gain": 0.75,
+      "boundary_fit": 0.94,
+      "evidence_confidence": 0.82,
+      "composability": 0.88,
+      "reversibility": 0.98,
+      "implementation_cost": 0.20,
+      "execution_risk": 0.08,
+      "time_to_proof": 0.15,
+      "evidence_refs": ["primary:release"],
+      "executable_ref": "experiments/runtime_probe.py"
+    },
+    {
+      "path_id": "weak-adapter",
+      "outcome": "implement",
+      "capability_gain": 0.60,
+      "boundary_fit": 0.70,
+      "evidence_confidence": 0.70,
+      "composability": 0.70,
+      "reversibility": 0.70,
+      "implementation_cost": 0.65,
+      "execution_risk": 0.40,
+      "time_to_proof": 0.65,
+      "evidence_refs": ["primary:release"],
+      "executable_ref": "experiments/weak.py"
+    }
+  ]
+}
