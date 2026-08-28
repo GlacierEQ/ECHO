@@ -22,7 +22,9 @@ def main(argv: list[str] | None = None):
     ingest.add_argument("--source", default="manual")
     ingest.add_argument("--external-id", required=True)
     ingest.add_argument("--title", required=True)
-    ingest.add_argument("--content", required=True, help="role: content (or plain text)")
+    ingest.add_argument(
+        "--content", required=True, help="role: content (or plain text)"
+    )
     search = sub.add_parser("search", help="Search conversations")
     search.add_argument("query", nargs="?", default="")
     job = sub.add_parser("job", help="Enqueue + run a supported job")
@@ -58,7 +60,9 @@ def main(argv: list[str] | None = None):
             return 0
         if args.cmd == "search":
             results = service.search(q=args.query)
-            print(json.dumps([item.model_dump(mode="json") for item in results], indent=2))
+            print(
+                json.dumps([item.model_dump(mode="json") for item in results], indent=2)
+            )
             return 0
         if args.cmd == "job":
             queued = service.enqueue_job(
@@ -103,7 +107,9 @@ def _verify(path: Path) -> int:
         assert integrity.valid
         assert ran.status == "succeeded"
         print("VERIFIED")
-        print(json.dumps({"conversation_id": conversation.id, "job_id": ran.id}, indent=2))
+        print(
+            json.dumps({"conversation_id": conversation.id, "job_id": ran.id}, indent=2)
+        )
         return 0
 
 

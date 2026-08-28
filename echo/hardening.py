@@ -20,7 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 ASGIApp = Callable[
-    [dict[str, Any], Callable[[], Awaitable[dict[str, Any]]], Callable[[dict[str, Any]], Awaitable[None]]],
+    [
+        dict[str, Any],
+        Callable[[], Awaitable[dict[str, Any]]],
+        Callable[[dict[str, Any]], Awaitable[None]],
+    ],
     Awaitable[None],
 ]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -58,7 +62,9 @@ def _bounded_request_limit(value: str) -> int:
 
 
 def _csv_values(value: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    return tuple(
+        dict.fromkeys(item.strip() for item in value.split(",") if item.strip())
+    )
 
 
 def _safe_cors_origins(value: str) -> tuple[str, ...]:
@@ -117,7 +123,9 @@ class RequestSizeLimitMiddleware:
         self.app = app
         self.max_request_bytes = max_request_bytes
 
-    async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+    async def __call__(
+        self, scope: dict[str, Any], receive: Receive, send: Send
+    ) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
@@ -196,7 +204,9 @@ class SecurityHeadersMiddleware:
             "base-uri 'none'; form-action 'none'"
         )
 
-    async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+    async def __call__(
+        self, scope: dict[str, Any], receive: Receive, send: Send
+    ) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
@@ -205,7 +215,9 @@ class SecurityHeadersMiddleware:
         path = str(scope.get("path", ""))
         enforced = {
             b"cache-control": b"no-store",
-            b"content-security-policy": self._content_security_policy(path).encode("ascii"),
+            b"content-security-policy": self._content_security_policy(path).encode(
+                "ascii"
+            ),
             b"cross-origin-opener-policy": b"same-origin",
             b"cross-origin-resource-policy": b"same-origin",
             b"permissions-policy": b"camera=(), microphone=(), geolocation=(), payment=(), usb=()",

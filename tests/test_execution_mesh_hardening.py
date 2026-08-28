@@ -6,7 +6,13 @@ import json
 
 import pytest
 
-from echo.execution_mesh import ExecutionMesh, ExecutionSnapshot, ExecutionTask, TaskState, WorkerResult
+from echo.execution_mesh import (
+    ExecutionMesh,
+    ExecutionSnapshot,
+    ExecutionTask,
+    TaskState,
+    WorkerResult,
+)
 
 
 class Worker:
@@ -14,16 +20,27 @@ class Worker:
     capabilities = frozenset({"code"})
 
     async def execute(self, task, context):
-        return WorkerResult(output={"task": task.task_id}, terminal={"ok": True}, agent_steps=1, tool_calls=1)
+        return WorkerResult(
+            output={"task": task.task_id},
+            terminal={"ok": True},
+            agent_steps=1,
+            tool_calls=1,
+        )
 
 
 def _redigest(payload):
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
 
 
 def test_stale_lease_honors_attempt_budget_and_fails_terminally():
     clock = [100.0]
-    mesh = ExecutionMesh([ExecutionTask("a", "run", max_attempts=1)], lease_seconds=5, clock=lambda: clock[0])
+    mesh = ExecutionMesh(
+        [ExecutionTask("a", "run", max_attempts=1)],
+        lease_seconds=5,
+        clock=lambda: clock[0],
+    )
     mesh._lease(mesh.tasks["a"], "dead")
     mesh.runtime["a"].state = TaskState.RUNNING
     mesh.runtime["a"].attempts = 1
@@ -45,7 +62,9 @@ def test_cancelled_execution_clears_running_lease_and_preserves_retry():
     async def scenario():
         mesh = ExecutionMesh([ExecutionTask("a", "run", max_attempts=2)])
         mesh._lease(mesh.tasks["a"], "worker")
-        execution = asyncio.create_task(mesh._execute_one(SlowWorker(), mesh.tasks["a"]))
+        execution = asyncio.create_task(
+            mesh._execute_one(SlowWorker(), mesh.tasks["a"])
+        )
         await started.wait()
         execution.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -66,7 +85,11 @@ def test_expired_attempt_cannot_commit_stale_output():
             clock[0] = 200.0
             return await super().execute(task, context)
 
-    mesh = ExecutionMesh([ExecutionTask("a", "run", max_attempts=2)], lease_seconds=10, clock=lambda: clock[0])
+    mesh = ExecutionMesh(
+        [ExecutionTask("a", "run", max_attempts=2)],
+        lease_seconds=10,
+        clock=lambda: clock[0],
+    )
     asyncio.run(mesh.run_wave(ExpiringWorker()))
     assert "a" not in mesh.results
     assert mesh.runtime["a"].state == TaskState.PENDING
@@ -75,7 +98,9 @@ def test_expired_attempt_cannot_commit_stale_output():
 
 def test_snapshot_uses_relative_lease_time_across_clock_domains():
     source_clock = [1_000.0]
-    mesh = ExecutionMesh([ExecutionTask("a", "run")], lease_seconds=30, clock=lambda: source_clock[0])
+    mesh = ExecutionMesh(
+        [ExecutionTask("a", "run")], lease_seconds=30, clock=lambda: source_clock[0]
+    )
     mesh._lease(mesh.tasks["a"], "worker")
     mesh.runtime["a"].state = TaskState.RUNNING
     mesh.runtime["a"].attempts = 1

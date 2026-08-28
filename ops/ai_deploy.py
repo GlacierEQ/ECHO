@@ -29,7 +29,10 @@ LOCK_FILE = ".ai-deploy.lock"
 ARTIFACT_DIR = "deployment-artifacts"
 
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key|token|password|secret|credential|authorization|bearer|hook)[=:\s]+[^\s\"']+", re.I),
+    re.compile(
+        r"(?i)(api[_-]?key|token|password|secret|credential|authorization|bearer|hook)[=:\s]+[^\s\"']+",
+        re.I,
+    ),
     re.compile(r"(?i)(postgres|mysql|mongodb|redis)://[^\s\"']+"),
     re.compile(r"(?i)eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     re.compile(r"(?i)ghp_[A-Za-z0-9]{20,}"),
@@ -122,7 +125,11 @@ def sha256_file(path: Path) -> str:
 def detect_project(root: Path) -> str:
     if (root / "Dockerfile").exists() or (root / "docker-compose.yml").exists():
         return "docker"
-    if (root / "pyproject.toml").exists() or (root / "requirements.txt").exists() or (root / "setup.py").exists():
+    if (
+        (root / "pyproject.toml").exists()
+        or (root / "requirements.txt").exists()
+        or (root / "setup.py").exists()
+    ):
         return "python"
     if (root / "package-lock.json").exists():
         return "npm"
@@ -142,7 +149,10 @@ def detect_project(root: Path) -> str:
 def default_pipeline(project_type: str) -> Pipeline:
     if project_type == "python":
         return Pipeline(
-            prepare=["python -m pip install --upgrade pip", "python -m pip install -e '.[dev]' || python -m pip install -r requirements.txt || true"],
+            prepare=[
+                "python -m pip install --upgrade pip",
+                "python -m pip install -e '.[dev]' || python -m pip install -r requirements.txt || true",
+            ],
             test=["python -m compileall -q .", "pytest -q --tb=line || true"],
             build=[],
             deploy=[],
@@ -160,7 +170,11 @@ def default_pipeline(project_type: str) -> Pipeline:
         )
     if project_type in {"npm", "pnpm", "yarn"}:
         pm = project_type if project_type != "npm" else "npm"
-        install = {"npm": "npm ci || npm install", "pnpm": "pnpm install --frozen-lockfile || pnpm install", "yarn": "yarn install --frozen-lockfile || yarn install"}[pm]
+        install = {
+            "npm": "npm ci || npm install",
+            "pnpm": "pnpm install --frozen-lockfile || pnpm install",
+            "yarn": "yarn install --frozen-lockfile || yarn install",
+        }[pm]
         return Pipeline(
             prepare=[install],
             test=[f"{pm} test --if-present"],
@@ -170,9 +184,23 @@ def default_pipeline(project_type: str) -> Pipeline:
             rollback=[],
         )
     if project_type == "go":
-        return Pipeline(prepare=["go mod download"], test=["go test ./..."], build=["go build ./..."], deploy=[], verify=[], rollback=[])
+        return Pipeline(
+            prepare=["go mod download"],
+            test=["go test ./..."],
+            build=["go build ./..."],
+            deploy=[],
+            verify=[],
+            rollback=[],
+        )
     if project_type == "rust":
-        return Pipeline(prepare=[], test=["cargo test"], build=["cargo build --release"], deploy=[], verify=[], rollback=[])
+        return Pipeline(
+            prepare=[],
+            test=["cargo test"],
+            build=["cargo build --release"],
+            deploy=[],
+            verify=[],
+            rollback=[],
+        )
     return Pipeline()
 
 
@@ -206,6 +234,7 @@ def load_spec(root: Path, args: argparse.Namespace) -> Spec:
         if os.environ.get("ROLLBACK_COMMAND"):
             pipeline.rollback = [os.environ["ROLLBACK_COMMAND"]]
     else:
+
         def phase(name: str, env_key: str | None = None) -> list[str]:
             if name in p:
                 return list(p.get(name) or [])
@@ -260,7 +289,9 @@ class DeployLock:
                     return False
             except Exception:
                 pass
-        self.path.write_text(json.dumps({"pid": os.getpid(), "at": utc_now()}), encoding="utf-8")
+        self.path.write_text(
+            json.dumps({"pid": os.getpid(), "at": utc_now()}), encoding="utf-8"
+        )
         self.held = True
         return True
 
@@ -300,13 +331,21 @@ def run_command(cmd: str, cwd: Path, timeout: int = 1800) -> StepResult:
             command=redact(cmd),
             exit_code=124,
             duration_seconds=round(time.monotonic() - started, 3),
-            stdout_tail=redact(tail((exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""))),
+            stdout_tail=redact(
+                tail(
+                    (exc.stdout or b"").decode()
+                    if isinstance(exc.stdout, bytes)
+                    else (exc.stdout or "")
+                )
+            ),
             stderr_tail="timeout",
             attempt=1,
         )
 
 
-def run_with_retries(cmd: str, cwd: Path, retries: int, backoff: float, phase: str) -> StepResult:
+def run_with_retries(
+    cmd: str, cwd: Path, retries: int, backoff: float, phase: str
+) -> StepResult:
     last: StepResult | None = None
     for attempt in range(1, retries + 2):
         result = run_command(cmd, cwd)
@@ -325,18 +364,34 @@ def check_health(h: HealthCheck) -> dict[str, Any]:
     evidence: list[dict[str, Any]] = []
     for i in range(1, h.attempts + 1):
         try:
-            req = Request(h.url, method="GET", headers={"User-Agent": f"ai-deploy/{VERSION}"})
+            req = Request(
+                h.url, method="GET", headers={"User-Agent": f"ai-deploy/{VERSION}"}
+            )
             with urlopen(req, timeout=h.timeout_seconds) as resp:
                 body = resp.read(4096).decode("utf-8", errors="replace")
                 status = getattr(resp, "status", 200)
                 ok = status in h.expect_status
                 if ok and h.expect_body_contains and h.expect_body_contains not in body:
                     ok = False
-                evidence.append({"attempt": i, "status": status, "ok": ok, "body_tail": redact(body[-200:])})
+                evidence.append(
+                    {
+                        "attempt": i,
+                        "status": status,
+                        "ok": ok,
+                        "body_tail": redact(body[-200:]),
+                    }
+                )
                 if ok:
-                    return {"url": h.url, "passed": True, "attempts": i, "evidence": evidence}
+                    return {
+                        "url": h.url,
+                        "passed": True,
+                        "attempts": i,
+                        "evidence": evidence,
+                    }
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            evidence.append({"attempt": i, "status": None, "ok": False, "error": type(exc).__name__})
+            evidence.append(
+                {"attempt": i, "status": None, "ok": False, "error": type(exc).__name__}
+            )
         if i < h.attempts:
             time.sleep(h.interval_seconds)
     return {"url": h.url, "passed": False, "attempts": h.attempts, "evidence": evidence}
@@ -347,15 +402,21 @@ def write_artifacts(root: Path, result: DeployResult) -> dict[str, str]:
     art.mkdir(parents=True, exist_ok=True)
     result_path = art / RESULT_FILE
     result_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
-    (root / RESULT_FILE).write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    (root / RESULT_FILE).write_text(
+        json.dumps(asdict(result), indent=2), encoding="utf-8"
+    )
     manifest = {RESULT_FILE: sha256_file(result_path)}
     log_path = art / "deploy.log"
     lines = []
     for s in result.steps:
-        lines.append(f"$ {s.get('command')}\nexit={s.get('exit_code')}\n{s.get('stdout_tail')}\n{s.get('stderr_tail')}\n")
+        lines.append(
+            f"$ {s.get('command')}\nexit={s.get('exit_code')}\n{s.get('stdout_tail')}\n{s.get('stderr_tail')}\n"
+        )
     log_path.write_text("\n".join(lines), encoding="utf-8")
     manifest["deploy.log"] = sha256_file(log_path)
-    (art / "manifest.sha256").write_text("\n".join(f"{v}  {k}" for k, v in manifest.items()) + "\n", encoding="utf-8")
+    (art / "manifest.sha256").write_text(
+        "\n".join(f"{v}  {k}" for k, v in manifest.items()) + "\n", encoding="utf-8"
+    )
     return manifest
 
 
@@ -387,10 +448,14 @@ def execute(root: Path, spec: Spec) -> DeployResult:
     try:
         for phase in ("prepare", "test", "build", "deploy", "verify"):
             for cmd in phase_commands(spec, phase):
-                step = run_with_retries(cmd, root, spec.retries, spec.backoff_seconds, phase)
+                step = run_with_retries(
+                    cmd, root, spec.retries, spec.backoff_seconds, phase
+                )
                 result.steps.append(asdict(step))
                 if step.exit_code != 0:
-                    result.error = f"{phase} failed: {step.command} (exit {step.exit_code})"
+                    result.error = (
+                        f"{phase} failed: {step.command} (exit {step.exit_code})"
+                    )
                     result.exit_code = step.exit_code or 1
                     if deployed or phase in {"deploy", "verify"}:
                         for rb in phase_commands(spec, "rollback"):
@@ -417,7 +482,10 @@ def execute(root: Path, spec: Spec) -> DeployResult:
                 result.artifacts = write_artifacts(root, result)
                 return result
 
-        if not any(phase_commands(spec, p) for p in ("deploy", "verify")) and not spec.health:
+        if (
+            not any(phase_commands(spec, p) for p in ("deploy", "verify"))
+            and not spec.health
+        ):
             result.status = "CONFIG_ERROR"
             result.error = "no deploy/verify commands and no health checks configured"
             result.exit_code = 78
@@ -438,32 +506,51 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI Autonomous Deploy Runner")
     parser.add_argument("--root", default=".", help="Repository root")
     parser.add_argument("--spec", help="Path to deploy.spec.json")
-    parser.add_argument("--print-spec", action="store_true", help="Print resolved spec and exit")
+    parser.add_argument(
+        "--print-spec", action="store_true", help="Print resolved spec and exit"
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(json.dumps({"status": "CONFIG_ERROR", "error": f"root not found: {root}"}), file=sys.stderr)
+        print(
+            json.dumps({"status": "CONFIG_ERROR", "error": f"root not found: {root}"}),
+            file=sys.stderr,
+        )
         return 78
 
     try:
         spec = load_spec(root, args)
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        print(json.dumps({"status": "CONFIG_ERROR", "error": f"invalid spec: {exc}"}), file=sys.stderr)
+        print(
+            json.dumps({"status": "CONFIG_ERROR", "error": f"invalid spec: {exc}"}),
+            file=sys.stderr,
+        )
         return 78
 
     if args.print_spec:
-        print(json.dumps({
-            "version": spec.version,
-            "project_type": spec.project_type,
-            "pipeline": asdict(spec.pipeline),
-            "health": [asdict(h) for h in spec.health],
-            "retries": spec.retries,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "version": spec.version,
+                    "project_type": spec.project_type,
+                    "pipeline": asdict(spec.pipeline),
+                    "health": [asdict(h) for h in spec.health],
+                    "retries": spec.retries,
+                },
+                indent=2,
+            )
+        )
         return 0
 
-    if not phase_commands(spec, "deploy") and not spec.health and not os.environ.get("DEPLOY_COMMAND"):
-        if not any(phase_commands(spec, p) for p in ("prepare", "test", "build", "verify")):
+    if (
+        not phase_commands(spec, "deploy")
+        and not spec.health
+        and not os.environ.get("DEPLOY_COMMAND")
+    ):
+        if not any(
+            phase_commands(spec, p) for p in ("prepare", "test", "build", "verify")
+        ):
             out = DeployResult(
                 status="CONFIG_ERROR",
                 run_id=str(uuid.uuid4()),

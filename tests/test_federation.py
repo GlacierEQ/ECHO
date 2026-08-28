@@ -73,9 +73,7 @@ def test_federation_reports_unroutable_work_without_fake_execution():
     )
     python_worker = Worker("python", {"python"}, {"python": 1.0})
 
-    result = asyncio.run(
-        FederatedExecutor(mesh).run_to_completion([python_worker])
-    )
+    result = asyncio.run(FederatedExecutor(mesh).run_to_completion([python_worker]))
 
     assert result["succeeded"] == []
     assert result["unroutable"] == ["formal"]
@@ -93,8 +91,6 @@ def test_federation_parallelizes_across_worker_types_in_same_wave():
     reasoning = Worker("r", {"reasoning"}, {"reasoning": 1.0})
     gpu = Worker("g", {"gpu"}, {"gpu": 1.0})
 
-    assignments = asyncio.run(
-        FederatedExecutor(mesh).run_wave([reasoning, gpu])
-    )
+    assignments = asyncio.run(FederatedExecutor(mesh).run_wave([reasoning, gpu]))
     mapping = {item.task.task_id: item.backend.worker_id for item in assignments}
     assert mapping == {"a": "r", "b": "g"}

@@ -5,7 +5,13 @@ import pytest
 from echo.frontier import FrontierContinuityEngine, FrontierEvent
 
 
-def event(title: str, technology: str, published_at: str, *, source: str = "https://example.org/release") -> FrontierEvent:
+def event(
+    title: str,
+    technology: str,
+    published_at: str,
+    *,
+    source: str = "https://example.org/release",
+) -> FrontierEvent:
     return FrontierEvent(
         title=title,
         technology=technology,
@@ -20,8 +26,12 @@ def event(title: str, technology: str, published_at: str, *, source: str = "http
 
 def test_packet_deduplicates_and_orders_newest_first():
     engine = FrontierContinuityEngine(maximum_age_days=45)
-    older = event("Older", "Alpha", "2026-08-10T00:00:00Z", source="https://example.org/alpha")
-    newer = event("Newer", "Beta", "2026-08-14T00:00:00Z", source="https://example.org/beta")
+    older = event(
+        "Older", "Alpha", "2026-08-10T00:00:00Z", source="https://example.org/alpha"
+    )
+    newer = event(
+        "Newer", "Beta", "2026-08-14T00:00:00Z", source="https://example.org/beta"
+    )
     packet = engine.build_packet([older, newer, newer], target_day=date(2026, 8, 15))
     assert [item.technology for item in packet.events] == ["Beta", "Alpha"]
     assert packet.duplicate_count == 1

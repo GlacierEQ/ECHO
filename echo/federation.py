@@ -40,7 +40,10 @@ class FederatedExecutor:
         raw = getattr(backend, "fitness", {})
         fitness: Mapping[str, float] = raw if isinstance(raw, Mapping) else {}
         if task.required_capabilities:
-            return sum(float(fitness.get(capability, 1.0)) for capability in task.required_capabilities)
+            return sum(
+                float(fitness.get(capability, 1.0))
+                for capability in task.required_capabilities
+            )
         return float(fitness.get("*", 1.0))
 
     def plan_wave(
@@ -131,9 +134,11 @@ class FederatedExecutor:
             for task_id, state in self.mesh.runtime.items()
             if state.state in {TaskState.PENDING, TaskState.LEASED, TaskState.RUNNING}
         )
-        available_capabilities = frozenset().union(
-            *(backend.capabilities for backend in backends)
-        ) if backends else frozenset()
+        available_capabilities = (
+            frozenset().union(*(backend.capabilities for backend in backends))
+            if backends
+            else frozenset()
+        )
         unroutable = sorted(
             task_id
             for task_id in incomplete

@@ -13,7 +13,9 @@ from echo.auth import require_authority, require_scope, sign_authority
 def test_valid_authority_envelope(monkeypatch):
     monkeypatch.setenv("ECHO_AKOS_SHARED_SECRET", "test-secret")
     timestamp = str(int(time.time()))
-    signature = sign_authority("test-secret", "akos:test", "echo:write,echo:execute", timestamp, "n-1")
+    signature = sign_authority(
+        "test-secret", "akos:test", "echo:write,echo:execute", timestamp, "n-1"
+    )
     authority = require_authority(
         x_akos_actor="akos:test",
         x_akos_scope="echo:write,echo:execute",
@@ -51,7 +53,9 @@ def test_invalid_signature_and_scope_are_rejected(monkeypatch):
         )
     assert signature_failure.value.status_code == 403
 
-    signature = sign_authority("test-secret", "akos:test", "echo:read", timestamp, "n-4")
+    signature = sign_authority(
+        "test-secret", "akos:test", "echo:read", timestamp, "n-4"
+    )
     authority = require_authority(
         x_akos_actor="akos:test",
         x_akos_scope="echo:read",

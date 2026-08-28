@@ -89,7 +89,9 @@ class DurableRunORM(Base):
         String(32), default="active", nullable=False, index=True
     )
     event_head_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    mesh_receipt_head: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    mesh_receipt_head: Mapped[str] = mapped_column(
+        String(64), default="", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -249,7 +251,9 @@ class DurableExecutionStore:
                 "lease_seconds": mesh.lease_seconds,
                 "tasks": [
                     cls._definition(task)
-                    for task in sorted(mesh.tasks.values(), key=lambda item: item.task_id)
+                    for task in sorted(
+                        mesh.tasks.values(), key=lambda item: item.task_id
+                    )
                 ],
             }
         )
@@ -383,7 +387,9 @@ class DurableExecutionStore:
         common = min(len(existing), len(normalized))
         for index in range(common):
             if existing[index].content_hash != normalized[index][1]:
-                raise ValueError("snapshot receipt chain diverges from durable receipts")
+                raise ValueError(
+                    "snapshot receipt chain diverges from durable receipts"
+                )
         if len(existing) > len(normalized):
             raise ValueError("snapshot receipt chain is behind durable receipt state")
 
@@ -614,9 +620,7 @@ class DurableExecutionStore:
         return tuple(sorted(recovered))
 
     def _dependency_success(self, rows: Sequence[DurableTaskORM]) -> set[str]:
-        return {
-            row.task_id for row in rows if row.status == TaskState.SUCCEEDED.value
-        }
+        return {row.task_id for row in rows if row.status == TaskState.SUCCEEDED.value}
 
     def _claimable_ids(
         self,
@@ -792,9 +796,7 @@ class DurableExecutionStore:
             raise StaleLeaseError("lease has expired")
         return row
 
-    def mark_running(
-        self, token: LeaseToken, *, now: datetime | None = None
-    ) -> None:
+    def mark_running(self, token: LeaseToken, *, now: datetime | None = None) -> None:
         row = self._validate_token(token, now=now)
         row.status = TaskState.RUNNING.value
         self._append_event(
@@ -910,9 +912,7 @@ class DurableExecutionStore:
         row = self._validate_token(token, now=now)
         max_attempts = int(row.definition.get("max_attempts", 1))
         should_retry = retry and row.attempts < max_attempts
-        row.status = (
-            TaskState.PENDING.value if should_retry else TaskState.FAILED.value
-        )
+        row.status = TaskState.PENDING.value if should_retry else TaskState.FAILED.value
         row.last_error = error
         row.lease_owner = ""
         row.lease_expires_at = None
@@ -1035,7 +1035,9 @@ class DurableExecutionStore:
                 mesh.max_concurrency != run.max_concurrency
                 or abs(mesh.lease_seconds - run.lease_seconds) > 1e-9
             ):
-                raise ValueError("snapshot scheduling settings diverge from durable run")
+                raise ValueError(
+                    "snapshot scheduling settings diverge from durable run"
+                )
         else:
             mesh = ExecutionMesh(
                 [self._task_from_definition(row.definition) for row in rows],
@@ -1057,8 +1059,7 @@ class DurableExecutionStore:
             if row.status == TaskState.SUCCEEDED.value and row.result:
                 mesh.results[row.task_id] = self._deserialize_result(row.result)
             elif (
-                row.task_id in mesh.results
-                and row.status != TaskState.SUCCEEDED.value
+                row.task_id in mesh.results and row.status != TaskState.SUCCEEDED.value
             ):
                 del mesh.results[row.task_id]
 

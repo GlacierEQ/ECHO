@@ -20,7 +20,9 @@ def _normalize_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if parts.scheme != "https" or not parts.netloc:
         raise ValueError("source_url must be an absolute https URL")
-    return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
+    return urlunsplit(
+        (parts.scheme, parts.netloc.lower(), parts.path.rstrip("/"), parts.query, "")
+    )
 
 
 def _parse_time(value: str) -> datetime:
@@ -88,11 +90,15 @@ class FrontierPacket:
     events: tuple[FrontierEvent, ...]
     duplicate_count: int
     stale_count: int
-    generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     @property
     def technologies(self) -> tuple[str, ...]:
-        return tuple(sorted({event.technology for event in self.events}, key=str.casefold))
+        return tuple(
+            sorted({event.technology for event in self.events}, key=str.casefold)
+        )
 
     @property
     def domains(self) -> tuple[str, ...]:
@@ -142,7 +148,9 @@ class FrontierContinuityEngine:
         stale = 0
         for event in events:
             event.validate()
-            age_days = (target_midnight - _parse_time(event.published_at)).total_seconds() / 86400.0
+            age_days = (
+                target_midnight - _parse_time(event.published_at)
+            ).total_seconds() / 86400.0
             if age_days > self.maximum_age_days:
                 stale += 1
                 continue
@@ -171,9 +179,13 @@ class FrontierContinuityEngine:
         )
 
     @staticmethod
-    def unseen(packet: FrontierPacket, processed_event_ids: Iterable[str]) -> tuple[FrontierEvent, ...]:
+    def unseen(
+        packet: FrontierPacket, processed_event_ids: Iterable[str]
+    ) -> tuple[FrontierEvent, ...]:
         processed = {item.strip() for item in processed_event_ids if item.strip()}
-        return tuple(event for event in packet.events if event.event_id not in processed)
+        return tuple(
+            event for event in packet.events if event.event_id not in processed
+        )
 
     @staticmethod
     def innovation_payload(packet: FrontierPacket) -> Mapping[str, object]:
@@ -182,5 +194,10 @@ class FrontierContinuityEngine:
             "schema": "glaciereq.echo.frontier-to-innovation.v1",
             "target_day": packet.target_day,
             "events": [event.as_dict() for event in packet.events],
-            "required_outcome": ["implement", "experiment", "hold_with_reason", "reject_with_reason"],
+            "required_outcome": [
+                "implement",
+                "experiment",
+                "hold_with_reason",
+                "reject_with_reason",
+            ],
         }

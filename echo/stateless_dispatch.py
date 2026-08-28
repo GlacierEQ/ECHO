@@ -60,7 +60,11 @@ class DispatchEnvelope:
             raise ValueError("timeout_seconds must be positive")
         if not set(self.required_capabilities).issubset(self.worker_capabilities):
             raise ValueError("worker does not satisfy required capabilities")
-        required_resource_keys = {"max_agent_steps", "max_tool_calls", "max_output_bytes"}
+        required_resource_keys = {
+            "max_agent_steps",
+            "max_tool_calls",
+            "max_output_bytes",
+        }
         if set(self.resources) != required_resource_keys:
             raise ValueError("resource envelope keys are incomplete")
         if int(self.resources["max_agent_steps"]) < 1:
@@ -152,7 +156,9 @@ class WorkerCatalogSnapshot:
     digest: str
 
     @classmethod
-    def from_backends(cls, backends: Iterable[WorkerBackend]) -> "WorkerCatalogSnapshot":
+    def from_backends(
+        cls, backends: Iterable[WorkerBackend]
+    ) -> "WorkerCatalogSnapshot":
         entries = tuple(
             sorted(
                 (
@@ -202,8 +208,14 @@ def build_dispatch_envelope(
         worker_id=backend.worker_id,
         required_capabilities=tuple(sorted(task.required_capabilities)),
         worker_capabilities=tuple(sorted(backend.capabilities)),
-        dependency_outputs={key: dict(value) for key, value in sorted(context.dependency_outputs.items())},
-        dependency_terminals={key: dict(value) for key, value in sorted(context.dependency_terminals.items())},
+        dependency_outputs={
+            key: dict(value)
+            for key, value in sorted(context.dependency_outputs.items())
+        },
+        dependency_terminals={
+            key: dict(value)
+            for key, value in sorted(context.dependency_terminals.items())
+        },
         timeout_seconds=task.timeout_seconds,
         resources={
             "max_agent_steps": task.resources.max_agent_steps,

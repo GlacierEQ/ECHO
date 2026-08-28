@@ -53,7 +53,13 @@ def test_integrity_recomputation_and_quarantine(svc: ContinuityService):
     assert valid.valid is True
 
     # Simulate out-of-band database tampering.
-    message = svc.session.execute(select(__import__("echo.models", fromlist=["MessageORM"]).MessageORM)).scalars().first()
+    message = (
+        svc.session.execute(
+            select(__import__("echo.models", fromlist=["MessageORM"]).MessageORM)
+        )
+        .scalars()
+        .first()
+    )
     message.content = "tampered"
     svc.session.flush()
     invalid = svc.verify_integrity(conv.id)

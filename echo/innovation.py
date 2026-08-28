@@ -6,6 +6,7 @@ paths, Pareto-filtered without collapsing real tradeoffs, and converted into one
 reproducible decision. The engine never treats a score as project authority and
 never claims an implementation happened merely because a path was selected.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -99,7 +100,10 @@ class InnovationPath:
 
     @property
     def actionable(self) -> bool:
-        return self.outcome in {InnovationOutcome.IMPLEMENT, InnovationOutcome.EXPERIMENT}
+        return self.outcome in {
+            InnovationOutcome.IMPLEMENT,
+            InnovationOutcome.EXPERIMENT,
+        }
 
     def accepted_by(self, constraints: InnovationConstraints) -> bool:
         if self.evidence_confidence < constraints.minimum_evidence_confidence:
@@ -114,9 +118,16 @@ class InnovationPath:
             and self.execution_risk > constraints.max_execution_risk
         ):
             return False
-        if constraints.max_time_to_proof is not None and self.time_to_proof > constraints.max_time_to_proof:
+        if (
+            constraints.max_time_to_proof is not None
+            and self.time_to_proof > constraints.max_time_to_proof
+        ):
             return False
-        if constraints.require_executable_for_action and self.actionable and not self.executable_ref:
+        if (
+            constraints.require_executable_for_action
+            and self.actionable
+            and not self.executable_ref
+        ):
             return False
         return True
 
@@ -136,11 +147,19 @@ class InnovationPath:
             other.reversibility,
         )
         costs = (self.implementation_cost, self.execution_risk, self.time_to_proof)
-        other_costs = (other.implementation_cost, other.execution_risk, other.time_to_proof)
+        other_costs = (
+            other.implementation_cost,
+            other.execution_risk,
+            other.time_to_proof,
+        )
         no_worse = all(left >= right for left, right in zip(gains, other_gains))
-        no_worse = no_worse and all(left <= right for left, right in zip(costs, other_costs))
+        no_worse = no_worse and all(
+            left <= right for left, right in zip(costs, other_costs)
+        )
         strictly_better = any(left > right for left, right in zip(gains, other_gains))
-        strictly_better = strictly_better or any(left < right for left, right in zip(costs, other_costs))
+        strictly_better = strictly_better or any(
+            left < right for left, right in zip(costs, other_costs)
+        )
         return no_worse and strictly_better
 
     def as_dict(self) -> dict[str, object]:
@@ -160,7 +179,9 @@ class InnovationDecision:
 
     @property
     def digest(self) -> str:
-        payload = json.dumps(self.as_dict(include_digest=False), sort_keys=True, separators=(",", ":"))
+        payload = json.dumps(
+            self.as_dict(include_digest=False), sort_keys=True, separators=(",", ":")
+        )
         return sha256(payload.encode("utf-8")).hexdigest()
 
     def as_dict(self, *, include_digest: bool = True) -> dict[str, object]:
@@ -190,7 +211,9 @@ class InnovationDecisionEngine:
         if not self.paths:
             raise ValueError("at least one innovation path is required")
         if any(path.event_id != event.event_id for path in self.paths):
-            raise ValueError("all innovation paths must bind to the supplied frontier event")
+            raise ValueError(
+                "all innovation paths must bind to the supplied frontier event"
+            )
         ids = [path.path_id for path in self.paths]
         if len(ids) != len(set(ids)):
             raise ValueError("path_id values must be unique within an event")
@@ -296,7 +319,12 @@ class InnovationDecisionEngine:
                     low, high = bounds[name]
                     value = normalized(float(getattr(path, name)), low, high)
                     total += value if gain else 1.0 - value
-                return (total, path.capability_gain, path.evidence_confidence, path.path_id)
+                return (
+                    total,
+                    path.capability_gain,
+                    path.evidence_confidence,
+                    path.path_id,
+                )
 
             selected = max(frontier, key=score)
 

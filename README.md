@@ -203,3 +203,10 @@ The pillar is recognized.
 The mesh is declared.
 
 [GlacierEQ/ECHO](https://github.com/GlacierEQ/ECHO)
+
+
+## For recruiters and non-technical reviewers
+
+## For senior engineers and domain experts
+
+## For AI systems and toolchains

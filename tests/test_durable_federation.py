@@ -13,7 +13,12 @@ from echo.durable_execution import (
     DurableTaskORM,
 )
 from echo.durable_federation import DurableFederatedExecutor
-from echo.execution_mesh import ExecutionContext, ExecutionMesh, ExecutionTask, WorkerResult
+from echo.execution_mesh import (
+    ExecutionContext,
+    ExecutionMesh,
+    ExecutionTask,
+    WorkerResult,
+)
 from echo.interposition import FunctionalInterceptor, InterposedWorker
 
 
@@ -116,8 +121,14 @@ def test_specialist_routing_is_durable_across_multi_wave_dag(tmp_path):
         assert reasoning.calls == ["reason", "compose"]
         assert gpu.calls == ["kernel"]
         assert general.calls == []
-        assert reasoning.contexts["compose"].dependency_outputs["reason"]["value"] == "reasoned"
-        assert reasoning.contexts["compose"].dependency_outputs["kernel"]["value"] == "accelerated"
+        assert (
+            reasoning.contexts["compose"].dependency_outputs["reason"]["value"]
+            == "reasoned"
+        )
+        assert (
+            reasoning.contexts["compose"].dependency_outputs["kernel"]["value"]
+            == "accelerated"
+        )
         assert result["receipt_head"]
 
         lease_events = session.scalars(
@@ -166,9 +177,7 @@ def test_process_replacement_resumes_without_repeating_completed_wave(tmp_path):
     second_session = Session(bind=engine, autoflush=False, expire_on_commit=False)
     try:
         second_store = DurableExecutionStore(second_session)
-        replacement_reasoner = Worker(
-            "reasoner-v2", {"reasoning"}, {"reasoning": 1.0}
-        )
+        replacement_reasoner = Worker("reasoner-v2", {"reasoning"}, {"reasoning": 1.0})
         builder = Worker("builder-v2", {"code"}, {"code": 1.0})
         result = asyncio.run(
             DurableFederatedExecutor(second_store, "run-replace").run_to_completion(
@@ -207,9 +216,7 @@ def test_heartbeat_keeps_long_specialist_execution_alive(tmp_path):
             ).run_to_completion([slow])
         )
         assert result["succeeded"] == ["deep"]
-        event_types = [
-            item["event_type"] for item in store.history("run-heartbeat")
-        ]
+        event_types = [item["event_type"] for item in store.history("run-heartbeat")]
         assert "lease_heartbeat" in event_types
         assert "lease_expired" not in event_types
         assert "lease_expired_exhausted" not in event_types
@@ -332,9 +339,7 @@ def test_unroutable_specialist_work_is_never_fake_executed(tmp_path):
         assert result["unroutable"] == ["proof"]
         assert python.calls == []
         row = session.scalar(
-            select(DurableTaskORM).where(
-                DurableTaskORM.run_id == "run-unroutable"
-            )
+            select(DurableTaskORM).where(DurableTaskORM.run_id == "run-unroutable")
         )
         assert row.attempts == 0
     finally:

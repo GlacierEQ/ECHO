@@ -54,8 +54,7 @@ async def lifespan(app: FastAPI):
 _IMPORT_AUTH_SETTINGS = get_auth_settings()
 _HARDENING_SETTINGS = get_hardening_settings()
 _DOCS_DISABLED = (
-    _IMPORT_AUTH_SETTINGS.mode == "enforce-all"
-    or not _HARDENING_SETTINGS.docs_enabled
+    _IMPORT_AUTH_SETTINGS.mode == "enforce-all" or not _HARDENING_SETTINGS.docs_enabled
 )
 app = FastAPI(
     title="ECHO",
@@ -269,7 +268,8 @@ _DOCS_CARD = (
 """
 )
 
-CONSOLE_HTML = """<!doctype html>
+CONSOLE_HTML = (
+    """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -303,10 +303,13 @@ browser-origin controls are enabled.</p>
 <p>ECHO never stores the identity provider's private signing key. Validated
 subjects and scopes are attached to job receipts for audit provenance.</p>
 </div>
-""" + _DOCS_CARD + """
+"""
+    + _DOCS_CARD
+    + """
 </div>
 </body>
 </html>"""
+)
 
 
 @app.get("/", response_class=HTMLResponse)

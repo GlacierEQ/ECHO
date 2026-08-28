@@ -1,4 +1,5 @@
 """P0.5 – direct-access ECHO end-to-end continuity tests."""
+
 from __future__ import annotations
 
 import pytest
@@ -81,9 +82,7 @@ class TestExecutionDeterministic:
         r = client.get("/conversations")
         assert r.status_code == 200
         convs = r.json()["conversations"]
-        target = next(
-            (c for c in convs if c["external_id"] == "p0.5-chain-test"), None
-        )
+        target = next((c for c in convs if c["external_id"] == "p0.5-chain-test"), None)
         assert target is not None
         assert len(target["content_hash"]) == 64
 

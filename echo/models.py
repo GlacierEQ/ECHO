@@ -9,7 +9,16 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -22,7 +31,9 @@ def stable_uuid(seed: str) -> str:
 
 
 def canonical_json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def content_sha256(payload: str | bytes) -> str:
@@ -37,7 +48,11 @@ class Base(DeclarativeBase):
 
 class ConversationORM(Base):
     __tablename__ = "conversations"
-    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_conversation_source_external"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "external_id", name="uq_conversation_source_external"
+        ),
+    )
 
     id = Column(String(36), primary_key=True)
     source = Column(String(128), nullable=False, index=True)
@@ -48,19 +63,28 @@ class ConversationORM(Base):
     metadata_ = Column("metadata", JSON, default=dict, nullable=False)
     summary = Column(Text, default="", nullable=False)
     content_hash = Column(String(64), nullable=False, index=True)
-    integrity_status = Column(String(32), default="unverified", nullable=False, index=True)
+    integrity_status = Column(
+        String(32), default="unverified", nullable=False, index=True
+    )
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
     message_count = Column(Integer, default=0, nullable=False)
 
 
 class MessageORM(Base):
     __tablename__ = "messages"
-    __table_args__ = (UniqueConstraint("conversation_id", "sequence", name="uq_message_sequence"),)
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence", name="uq_message_sequence"),
+    )
 
     id = Column(String(36), primary_key=True)
     conversation_id = Column(
-        String(36), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     role = Column(String(64), nullable=False)
     content = Column(Text, nullable=False)
@@ -72,7 +96,9 @@ class MessageORM(Base):
 
 class JobORM(Base):
     __tablename__ = "orchestration_jobs"
-    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_job_idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_job_idempotency_key"),
+    )
 
     id = Column(String(36), primary_key=True)
     job_type = Column(String(128), nullable=False, index=True)
@@ -86,17 +112,24 @@ class JobORM(Base):
     authority_actor = Column(String(255), default="", nullable=False)
     authority_scope = Column(String(255), default="", nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class ReceiptORM(Base):
     __tablename__ = "execution_receipts"
-    __table_args__ = (UniqueConstraint("job_id", "attempt", name="uq_receipt_job_attempt"),)
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt", name="uq_receipt_job_attempt"),
+    )
 
     id = Column(String(36), primary_key=True)
     job_id = Column(
-        String(36), ForeignKey("orchestration_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("orchestration_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     attempt = Column(Integer, nullable=False)
     action = Column(String(128), nullable=False)

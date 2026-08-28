@@ -112,11 +112,7 @@ class DurableFederatedExecutor:
         if candidate.attempts >= int(candidate.definition.get("max_attempts", 1)):
             return None
         if not set(candidate.definition.get("dependencies", [])).issubset(
-            {
-                row.task_id
-                for row in rows
-                if row.status == TaskState.SUCCEEDED.value
-            }
+            {row.task_id for row in rows if row.status == TaskState.SUCCEEDED.value}
         ):
             return None
         if not set(candidate.definition.get("required_capabilities", [])).issubset(
@@ -359,9 +355,7 @@ class DurableFederatedExecutor:
                     continue
 
                 completed_ids = sorted(
-                    task_id
-                    for task_id, future in running.items()
-                    if future in done
+                    task_id for task_id, future in running.items() if future in done
                 )
                 for task_id in completed_ids:
                     future = running.pop(task_id)
@@ -522,7 +516,5 @@ class DurableFederatedExecutor:
                 }
                 for item in outcomes
             ],
-            "receipt_head": (
-                mesh.receipts[-1].content_hash if mesh.receipts else ""
-            ),
+            "receipt_head": (mesh.receipts[-1].content_hash if mesh.receipts else ""),
         }

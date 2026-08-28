@@ -22,9 +22,7 @@ def test_full_direct_execution_receipt_loop(tmp_path):
                 "source": "grok-test",
                 "external_id": "trust-loop-1",
                 "title": "Trust Loop",
-                "messages": [
-                    {"role": "system", "content": "Prove the trust loop."}
-                ],
+                "messages": [{"role": "system", "content": "Prove the trust loop."}],
             },
         )
         assert conversation.status_code == 200

@@ -88,7 +88,9 @@ def test_snapshot_rehydrates_and_continues_with_replacement_worker():
     assert replacement.runtime["build"].state == TaskState.SUCCEEDED
     assert second_worker.contexts["build"].dependency_outputs["map"]["task"] == "map"
     assert result["receipt_head"]
-    assert replacement.receipts[-1].previous_hash == replacement.receipts[-2].content_hash
+    assert (
+        replacement.receipts[-1].previous_hash == replacement.receipts[-2].content_hash
+    )
 
 
 def test_snapshot_tampering_fails_closed():

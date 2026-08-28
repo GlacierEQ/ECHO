@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 import pytest
 
 from echo.durable_execution import LeaseToken
-from echo.execution_mesh import ExecutionContext, ExecutionTask, ResourceEnvelope, WorkerResult
+from echo.execution_mesh import (
+    ExecutionContext,
+    ExecutionTask,
+    ResourceEnvelope,
+    WorkerResult,
+)
 from echo.stateless_dispatch import (
     ContinuationCursor,
     WorkerCatalogSnapshot,
@@ -40,7 +45,9 @@ def fixture_assignment(*, epoch: int = 7) -> FakeAssignment:
         required_capabilities=("research", "python"),
         workspace_id="echo:frontier:2026-08-16",
         timeout_seconds=90.0,
-        resources=ResourceEnvelope(max_agent_steps=12, max_tool_calls=20, max_output_bytes=512_000),
+        resources=ResourceEnvelope(
+            max_agent_steps=12, max_tool_calls=20, max_output_bytes=512_000
+        ),
     )
     backend = FakeBackend("worker-a", frozenset({"python", "research", "network"}))
     token = LeaseToken(

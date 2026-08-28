@@ -73,14 +73,14 @@ def run(base_url: str) -> dict[str, Any]:
             results.append(check(run_response, 200, "job execution"))
 
             trust_response = client.get(f"/jobs/{job_id}/trust")
-            trust_result = check(trust_response, 200, "receipt trust-chain verification")
+            trust_result = check(
+                trust_response, 200, "receipt trust-chain verification"
+            )
             if trust_response.status_code == 200:
                 body = trust_response.json()
                 # In direct mode, authority_actor is recorded as direct-api;
                 # chain validity + terminal state still matter.
-                trust_result["passed"] = bool(
-                    body.get("valid") or body.get("verified")
-                )
+                trust_result["passed"] = bool(body.get("valid") or body.get("verified"))
             results.append(trust_result)
 
         unsupported = client.post(

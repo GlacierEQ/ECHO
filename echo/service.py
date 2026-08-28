@@ -101,11 +101,15 @@ class ContinuityService:
         conv = self.session.get(ConversationORM, conv_id)
         return self._to_out(conv) if conv else None
 
-    def search(self, q: str = "", label: Optional[str] = None, limit: int = 50) -> list[ConversationOut]:
+    def search(
+        self, q: str = "", label: Optional[str] = None, limit: int = 50
+    ) -> list[ConversationOut]:
         stmt = select(ConversationORM).distinct()
         if q:
             like = f"%{q}%"
-            stmt = stmt.outerjoin(MessageORM, MessageORM.conversation_id == ConversationORM.id)
+            stmt = stmt.outerjoin(
+                MessageORM, MessageORM.conversation_id == ConversationORM.id
+            )
             stmt = stmt.where(
                 or_(
                     ConversationORM.title.ilike(like),
@@ -113,16 +117,22 @@ class ContinuityService:
                     MessageORM.content.ilike(like),
                 )
             )
-        stmt = stmt.order_by(ConversationORM.updated_at.desc()).limit(limit * 3 if label else limit)
-        results = [self._to_out(row) for row in self.session.scalars(stmt).unique().all()]
+        stmt = stmt.order_by(ConversationORM.updated_at.desc()).limit(
+            limit * 3 if label else limit
+        )
+        results = [
+            self._to_out(row) for row in self.session.scalars(stmt).unique().all()
+        ]
         if label:
             results = [item for item in results if label in item.labels]
         return results[:limit]
 
     def list_messages(self, conv_id: str) -> list[dict[str, Any]]:
-        stmt = select(MessageORM).where(
-            MessageORM.conversation_id == conv_id
-        ).order_by(MessageORM.sequence)
+        stmt = (
+            select(MessageORM)
+            .where(MessageORM.conversation_id == conv_id)
+            .order_by(MessageORM.sequence)
+        )
         return [
             {
                 "id": row.id,
@@ -241,9 +251,13 @@ class ContinuityService:
             return self.verify_integrity(conv_id).model_dump(mode="json")
         raise ValueError(f"unsupported capability: {job.job_type}")
 
-    def _write_receipt(self, job: JobORM, outcome: str, details: dict[str, Any]) -> None:
+    def _write_receipt(
+        self, job: JobORM, outcome: str, details: dict[str, Any]
+    ) -> None:
         previous = self.session.scalar(
-            select(ReceiptORM).where(ReceiptORM.job_id == job.id).order_by(ReceiptORM.attempt.desc())
+            select(ReceiptORM)
+            .where(ReceiptORM.job_id == job.id)
+            .order_by(ReceiptORM.attempt.desc())
         )
         previous_hash = previous.content_hash if previous else ""
         payload = {
@@ -268,7 +282,9 @@ class ContinuityService:
         )
 
     def health(self) -> dict[str, Any]:
-        count = lambda model: self.session.scalar(select(func.count()).select_from(model)) or 0
+        count = lambda model: (
+            self.session.scalar(select(func.count()).select_from(model)) or 0
+        )
         return {
             "status": "ok",
             "version": "0.2.1-direct",
@@ -284,9 +300,18 @@ class ContinuityService:
 
     def recommendations(self) -> list[dict[str, str]]:
         return [
-            {"area": "workers", "action": "Add transactional leases and stale-worker recovery"},
-            {"area": "providers", "action": "Bind ChatGPT, Claude, Gemini, and Grok adapters behind capability contracts"},
-            {"area": "observability", "action": "Publish queue, latency, integrity, and retry metrics"},
+            {
+                "area": "workers",
+                "action": "Add transactional leases and stale-worker recovery",
+            },
+            {
+                "area": "providers",
+                "action": "Bind ChatGPT, Claude, Gemini, and Grok adapters behind capability contracts",
+            },
+            {
+                "area": "observability",
+                "action": "Publish queue, latency, integrity, and retry metrics",
+            },
         ]
 
     def export_json(self, conv_id: str) -> dict[str, Any]:
@@ -301,9 +326,28 @@ class ContinuityService:
 
     def export_markdown(self, conv_id: str) -> str:
         data = self.export_json(conv_id)
-        lines = [f"# {data['title']}", "", f"**Source:** `{data['source']}`", f"**External ID:** `{data['external_id']}`", f"**Hash:** `{data['content_hash']}`", "", "## Summary", data["summary"], "", "## Messages", ""]
+        lines = [
+            f"# {data['title']}",
+            "",
+            f"**Source:** `{data['source']}`",
+            f"**External ID:** `{data['external_id']}`",
+            f"**Hash:** `{data['content_hash']}`",
+            "",
+            "## Summary",
+            data["summary"],
+            "",
+            "## Messages",
+            "",
+        ]
         for message in data["messages"]:
-            lines.extend([f"### [{message['sequence']}] {message['role']}", "", message["content"], ""])
+            lines.extend(
+                [
+                    f"### [{message['sequence']}] {message['role']}",
+                    "",
+                    message["content"],
+                    "",
+                ]
+            )
         return "\n".join(lines)
 
     @staticmethod

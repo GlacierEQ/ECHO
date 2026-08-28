@@ -8,6 +8,7 @@ After verifying the rebuilt database, replace the old one:
     mv echo_data/echo.db echo_data/echo.db.bak
     mv echo_data/echo_rebuilt.db echo_data/echo.db
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +19,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from echo.db import get_engine, get_session, init_db
-from echo.models import ConversationORM, MessageORM, canonical_json, content_sha256, stable_uuid, utcnow
+from echo.models import (
+    ConversationORM,
+    MessageORM,
+    canonical_json,
+    content_sha256,
+    stable_uuid,
+    utcnow,
+)
 
 
 def export_conversations(old_db: Path) -> list[dict]:
@@ -33,18 +41,24 @@ def export_conversations(old_db: Path) -> list[dict]:
                 .order_by(MessageORM.sequence)
                 .all()
             )
-            records.append({
-                "source": conv.source,
-                "external_id": conv.external_id,
-                "title": conv.title,
-                "participants": conv.participants or [],
-                "labels": conv.labels or [],
-                "metadata": conv.metadata_ or {},
-                "messages": [
-                    {"role": m.role, "content": m.content, "metadata": m.metadata_ or {}}
-                    for m in msgs
-                ],
-            })
+            records.append(
+                {
+                    "source": conv.source,
+                    "external_id": conv.external_id,
+                    "title": conv.title,
+                    "participants": conv.participants or [],
+                    "labels": conv.labels or [],
+                    "metadata": conv.metadata_ or {},
+                    "messages": [
+                        {
+                            "role": m.role,
+                            "content": m.content,
+                            "metadata": m.metadata_ or {},
+                        }
+                        for m in msgs
+                    ],
+                }
+            )
     print(f"  Exported {len(records)} conversations from {old_db}")
     return records
 
@@ -58,11 +72,15 @@ def import_conversations(records: list[dict], new_db: Path) -> None:
             seed = f"{rec['source']}:{rec['external_id']}"
             conv_id = stable_uuid(seed)
 
-            canonical = canonical_json({
-                "source": rec["source"],
-                "external_id": rec["external_id"],
-                "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
-            })
+            canonical = canonical_json(
+                {
+                    "source": rec["source"],
+                    "external_id": rec["external_id"],
+                    "messages": [
+                        {"role": m["role"], "content": m["content"]} for m in messages
+                    ],
+                }
+            )
             content_hash = content_sha256(canonical)
 
             summary_parts = [m["content"][:120] for m in messages[:3]]
@@ -92,24 +110,32 @@ def import_conversations(records: list[dict], new_db: Path) -> None:
 
             for seq, msg in enumerate(messages):
                 msg_id = stable_uuid(f"{conv_id}:{seq}:{msg['role']}")
-                session.add(MessageORM(
-                    id=msg_id,
-                    conversation_id=conv_id,
-                    role=msg["role"],
-                    content=msg["content"],
-                    content_hash=content_sha256(msg["content"]),
-                    sequence=seq,
-                    metadata_=msg.get("metadata", {}),
-                    created_at=utcnow(),
-                ))
+                session.add(
+                    MessageORM(
+                        id=msg_id,
+                        conversation_id=conv_id,
+                        role=msg["role"],
+                        content=msg["content"],
+                        content_hash=content_sha256(msg["content"]),
+                        sequence=seq,
+                        metadata_=msg.get("metadata", {}),
+                        created_at=utcnow(),
+                    )
+                )
             imported += 1
     print(f"  Imported {imported} conversations into {new_db}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Rebuild ECHO database with governed schema")
-    parser.add_argument("--old", default="echo_data/echo.db", help="Path to old v0.1 database")
-    parser.add_argument("--new", default="echo_data/echo_rebuilt.db", help="Path for rebuilt database")
+    parser = argparse.ArgumentParser(
+        description="Rebuild ECHO database with governed schema"
+    )
+    parser.add_argument(
+        "--old", default="echo_data/echo.db", help="Path to old v0.1 database"
+    )
+    parser.add_argument(
+        "--new", default="echo_data/echo_rebuilt.db", help="Path for rebuilt database"
+    )
     parser.add_argument("--dump", help="Optional: dump exported JSON to this file")
     args = parser.parse_args()
 

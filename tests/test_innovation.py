@@ -78,7 +78,9 @@ class InnovationDecisionEngineTests(unittest.TestCase):
         decision = self.engine.decide(preference="maximum_advance")
         self.assertEqual(decision.selected.path_id, "implement-adapter")
         self.assertEqual(decision.evidence_state, EVIDENCE_STATE)
-        self.assertEqual(decision.as_dict()["execution_claim"], "SELECTION_ONLY_NOT_EXECUTION")
+        self.assertEqual(
+            decision.as_dict()["execution_claim"], "SELECTION_ONLY_NOT_EXECUTION"
+        )
 
     def test_fast_proof_preserves_experiment_as_real_frontier_choice(self) -> None:
         decision = self.engine.decide(preference="fast_proof")
@@ -94,12 +96,16 @@ class InnovationDecisionEngineTests(unittest.TestCase):
 
     def test_constraints_can_force_safe_bounded_experiment(self) -> None:
         decision = self.engine.decide(
-            InnovationConstraints(max_execution_risk=0.10, max_implementation_cost=0.30),
+            InnovationConstraints(
+                max_execution_risk=0.10, max_implementation_cost=0.30
+            ),
             preference="maximum_advance",
         )
         self.assertEqual(decision.selected.path_id, "bounded-experiment")
 
-    def test_action_without_executable_reference_is_not_silently_actionable(self) -> None:
+    def test_action_without_executable_reference_is_not_silently_actionable(
+        self,
+    ) -> None:
         path = InnovationPath(
             event_id=self.event.event_id,
             path_id="paper-only",

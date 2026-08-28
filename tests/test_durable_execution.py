@@ -114,9 +114,7 @@ def test_heartbeat_extends_live_fencing_token(store):
     )
     assert lease is not None
 
-    renewed = store.heartbeat(
-        lease, lease_seconds=30, now=start + timedelta(seconds=5)
-    )
+    renewed = store.heartbeat(lease, lease_seconds=30, now=start + timedelta(seconds=5))
     assert renewed.epoch == lease.epoch
     assert renewed.expires_at == start + timedelta(seconds=35)
     store.complete(renewed, result("done"), now=start + timedelta(seconds=20))
@@ -149,14 +147,14 @@ def test_append_only_history_is_hash_chained_and_detects_tampering(store):
     assert store.verify_history("run-history") is False
 
 
-def test_snapshot_plus_task_overlay_survives_crash_between_task_commit_and_checkpoint(store):
+def test_snapshot_plus_task_overlay_survives_crash_between_task_commit_and_checkpoint(
+    store,
+):
     execution = mesh()
     store.ensure_run("run-crash", execution)
     store.save_snapshot("run-crash", execution.snapshot())
 
-    lease = store.claim_next(
-        "run-crash", "reasoning-worker", frozenset({"reasoning"})
-    )
+    lease = store.claim_next("run-crash", "reasoning-worker", frozenset({"reasoning"}))
     assert lease is not None
     store.complete(lease, result("persisted-before-crash"))
 
@@ -229,12 +227,15 @@ def test_expired_final_attempt_fails_instead_of_requeueing_forever(store):
     )
     assert lease is not None
 
-    assert store.recover_expired(
-        "run-expired", now=start + timedelta(seconds=6)
-    ) == ("a",)
-    assert store.claim_next(
-        "run-expired", "replacement", frozenset(), now=start + timedelta(seconds=6)
-    ) is None
+    assert store.recover_expired("run-expired", now=start + timedelta(seconds=6)) == (
+        "a",
+    )
+    assert (
+        store.claim_next(
+            "run-expired", "replacement", frozenset(), now=start + timedelta(seconds=6)
+        )
+        is None
+    )
     row = store.session.scalar(
         select(DurableTaskORM).where(DurableTaskORM.run_id == "run-expired")
     )
@@ -295,12 +296,18 @@ def test_post_snapshot_task_receipt_survives_restore_and_next_checkpoint(store):
     store.save_snapshot("run-receipts", restored.snapshot())
     restored_again = store.restore_mesh("run-receipts")
     assert restored_again.receipts[-1].content_hash == first_head
-    assert store.session.scalar(
-        select(DurableRunORM).where(DurableRunORM.run_id == "run-receipts")
-    ).mesh_receipt_head == first_head
-    assert store.session.scalar(
-        select(DurableReceiptORM).where(DurableReceiptORM.run_id == "run-receipts")
-    ).content_hash == first_head
+    assert (
+        store.session.scalar(
+            select(DurableRunORM).where(DurableRunORM.run_id == "run-receipts")
+        ).mesh_receipt_head
+        == first_head
+    )
+    assert (
+        store.session.scalar(
+            select(DurableReceiptORM).where(DurableReceiptORM.run_id == "run-receipts")
+        ).content_hash
+        == first_head
+    )
 
 
 def test_sqlite_stale_reader_cannot_claim_already_reserved_task(tmp_path):

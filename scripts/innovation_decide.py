@@ -27,7 +27,9 @@ def load(path: Path) -> dict[str, object]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Select one evidence-bound ECHO innovation path.")
+    parser = argparse.ArgumentParser(
+        description="Select one evidence-bound ECHO innovation path."
+    )
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
