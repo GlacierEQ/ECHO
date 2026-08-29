@@ -105,6 +105,9 @@ class JobORM(Base):
     payload = Column(JSON, default=dict, nullable=False)
     idempotency_key = Column(String(255), nullable=False)
     status = Column(String(32), default="pending", nullable=False, index=True)
+    lease_owner = Column(String(255), default="", nullable=False)
+    lease_epoch = Column(Integer, default=0, nullable=False)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
     attempts = Column(Integer, default=0, nullable=False)
     max_attempts = Column(Integer, default=3, nullable=False)
     last_error = Column(Text, default="", nullable=False)
@@ -199,6 +202,8 @@ class JobOut(BaseModel):
     job_type: str
     idempotency_key: str
     status: str
+    lease_epoch: int
+    lease_expires_at: Optional[datetime] = None
     attempts: int
     max_attempts: int
     last_error: str
