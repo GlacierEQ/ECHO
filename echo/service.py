@@ -197,6 +197,8 @@ class ContinuityService:
             envelope = WorkEnvelope.from_dict(raw_envelope)
             if envelope.idempotency_key != data.idempotency_key:
                 raise ValueError("job idempotency key does not match work envelope")
+            if envelope.capability != data.job_type:
+                raise ValueError("job type does not match work-envelope capability")
         existing = self.session.scalar(
             select(JobORM).where(JobORM.idempotency_key == data.idempotency_key)
         )
