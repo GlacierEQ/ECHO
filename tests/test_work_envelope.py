@@ -1,5 +1,5 @@
 import unittest
-from contract import ReceiptChain, WorkEnvelope, verify_receipt_chain
+from echo.work_envelope import ExecutionReceipt, ReceiptChain, WorkEnvelope, sha256_hex, verify_receipt_chain
 
 class ContractTests(unittest.TestCase):
     def envelope(self):
@@ -17,13 +17,13 @@ class ContractTests(unittest.TestCase):
     def test_contract_rejects_write_mode_and_external_action(self):
         e = self.envelope()
         with self.assertRaises(ValueError): WorkEnvelope(**{**e.unsigned_dict(), "action_mode": "write"})
-        with self.assertRaises(ValueError): __import__('contract').ExecutionReceipt(e.work_id, e.envelope_sha256, "succeeded", True, "readback", __import__('contract').sha256_hex({}), "2026-08-25T14:36:00Z", external_actions_performed=1)
+        with self.assertRaises(ValueError): ExecutionReceipt(e.work_id, e.envelope_sha256, "succeeded", True, "readback", sha256_hex({}), "2026-08-25T14:36:00Z", external_actions_performed=1)
 
     def test_tampering_breaks_verification(self):
         e = self.envelope(); chain = ReceiptChain(e); r = chain.append(status="succeeded", output={"ok": True}, verified=True, verification_method="readback", created_at="2026-08-25T14:37:00Z")
         self.assertTrue(chain.verify())
         raw = r.as_dict(); raw['details'] = {'ok': False}
-        from contract import ExecutionReceipt
+        from echo.work_envelope import ExecutionReceipt
         with self.assertRaises(ValueError): ExecutionReceipt.from_dict(raw)
 
 if __name__ == '__main__': unittest.main()
