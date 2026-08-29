@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -23,6 +23,9 @@ from echo.models import (
     stable_uuid,
     utcnow,
 )
+from echo.trust import verify_receipt_chain
+from echo.work_adapter import ENVELOPE_PAYLOAD_KEY, receipts_from_durable_records
+from echo.work_envelope import WorkEnvelope
 
 SUPPORTED_JOBS = {"echo.ping", "echo.summarize", "echo.integrity.verify"}
 
@@ -187,6 +190,13 @@ class ContinuityService:
     def enqueue_job(self, data: JobIn, actor: str = "", scope: str = "") -> JobOut:
         if data.job_type not in SUPPORTED_JOBS:
             raise ValueError(f"unsupported capability: {data.job_type}")
+        raw_envelope = data.payload.get(ENVELOPE_PAYLOAD_KEY)
+        if raw_envelope is not None:
+            if not isinstance(raw_envelope, Mapping):
+                raise ValueError("work-envelope binding must be an object")
+            envelope = WorkEnvelope.from_dict(raw_envelope)
+            if envelope.idempotency_key != data.idempotency_key:
+                raise ValueError("job idempotency key does not match work envelope")
         existing = self.session.scalar(
             select(JobORM).where(JobORM.idempotency_key == data.idempotency_key)
         )
@@ -280,6 +290,38 @@ class ContinuityService:
                 content_hash=receipt_hash,
             )
         )
+
+    def portable_receipts(self, job_id: str) -> dict[str, Any]:
+        """Return a read-only portable proof view for an envelope-bound job."""
+        job = self.session.get(JobORM, job_id)
+        if not job:
+            raise ValueError("job not found")
+        raw_envelope = job.payload.get(ENVELOPE_PAYLOAD_KEY)
+        if not isinstance(raw_envelope, Mapping):
+            raise ValueError("job has no work-envelope binding")
+        envelope = WorkEnvelope.from_dict(raw_envelope)
+        if envelope.idempotency_key != job.idempotency_key:
+            raise ValueError("stored job and work envelope idempotency keys differ")
+        durable_report = verify_receipt_chain(self.session, job_id)
+        records = list(
+            self.session.scalars(
+                select(ReceiptORM)
+                .where(ReceiptORM.job_id == job_id)
+                .order_by(ReceiptORM.attempt.asc())
+            ).all()
+        )
+        chain = receipts_from_durable_records(envelope, records, job_id=job_id)
+        portable_valid = chain.verify()
+        return {
+            "job_id": job_id,
+            "work_id": envelope.work_id,
+            "envelope": envelope.as_dict(),
+            "portable_receipts": [receipt.as_dict() for receipt in chain.receipts],
+            "portable_head_hash": chain.head,
+            "portable_chain_valid": portable_valid,
+            "durable_chain": durable_report,
+            "verified": bool(durable_report["valid"] and portable_valid),
+        }
 
     def health(self) -> dict[str, Any]:
         count = lambda model: (

@@ -242,6 +242,16 @@ def get_job(job_id: str, _auth: AuthRead):
         return ContinuityService(session)._job_out(job)
 
 
+@app.get("/jobs/{job_id}/portable-receipts")
+def portable_receipts(job_id: str, _auth: AuthRead):
+    with get_session(ENGINE) as session:
+        try:
+            return ContinuityService(session).portable_receipts(job_id)
+        except ValueError as exc:
+            status_code = 404 if str(exc) == "job not found" else 422
+            raise HTTPException(status_code, str(exc)) from exc
+
+
 @app.get("/jobs/{job_id}/trust")
 def verify_job_trust(job_id: str, _auth: AuthRead):
     """Verify execution state and receipt-chain integrity."""
