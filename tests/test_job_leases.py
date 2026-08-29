@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import inspect, select, text
-from sqlalchemy.orm import Session
 
 from echo.db import get_session, init_db
 from echo.models import JobIn, JobORM, ReceiptORM
