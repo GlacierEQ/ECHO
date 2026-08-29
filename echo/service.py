@@ -396,28 +396,58 @@ class ContinuityService:
         assert job is not None
         try:
             result = self._dispatch(job)
-            if not self._lease_live(job, self._aware(utcnow())):
-                raise JobLeaseConflictError("lease expired before result commit")
-            job.status = "succeeded"
-            job.receipt = result
-            job.finished_at = utcnow()
+            commit_now = self._aware(utcnow())
+            update_result = self.session.execute(
+                update(JobORM)
+                .execution_options(synchronize_session=False)
+                .where(
+                    JobORM.id == job.id,
+                    JobORM.status == "running",
+                    JobORM.lease_owner == worker_id,
+                    JobORM.lease_epoch == job.lease_epoch,
+                    JobORM.lease_expires_at > commit_now,
+                )
+                .values(
+                    status="succeeded",
+                    receipt=result,
+                    finished_at=commit_now,
+                    lease_owner="",
+                    lease_expires_at=None,
+                )
+            )
+            if update_result.rowcount != 1:
+                raise JobLeaseConflictError("lease fence rejected result commit")
+            self.session.refresh(job)
             self._write_receipt(job, "success", result)
-            job.lease_owner = ""
-            job.lease_expires_at = None
         except JobLeaseConflictError:
             raise
         except Exception as exc:
-            if not self._lease_live(job, self._aware(utcnow())):
+            commit_now = self._aware(utcnow())
+            next_status = "retrying" if job.attempts < job.max_attempts else "failed"
+            update_result = self.session.execute(
+                update(JobORM)
+                .execution_options(synchronize_session=False)
+                .where(
+                    JobORM.id == job.id,
+                    JobORM.status == "running",
+                    JobORM.lease_owner == worker_id,
+                    JobORM.lease_epoch == job.lease_epoch,
+                    JobORM.lease_expires_at > commit_now,
+                )
+                .values(
+                    status=next_status,
+                    last_error=str(exc),
+                    finished_at=commit_now if next_status == "failed" else None,
+                    lease_owner="",
+                    lease_expires_at=None,
+                )
+            )
+            if update_result.rowcount != 1:
                 raise JobLeaseConflictError(
-                    "lease expired before failure commit"
+                    "lease fence rejected failure commit"
                 ) from exc
-            job.status = "retrying" if job.attempts < job.max_attempts else "failed"
-            job.last_error = str(exc)
-            if job.status == "failed":
-                job.finished_at = utcnow()
+            self.session.refresh(job)
             self._write_receipt(job, "failure", {"error": str(exc)})
-            job.lease_owner = ""
-            job.lease_expires_at = None
         self.session.flush()
         return self._job_out(job)
 

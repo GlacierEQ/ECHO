@@ -125,9 +125,13 @@ def _ensure_job_lease_columns(engine: Engine) -> None:
         item["name"] for item in inspect(engine).get_columns("orchestration_jobs")
     }
     missing = {
-        "lease_owner": 'VARCHAR(255) NOT NULL DEFAULT ''',
+        "lease_owner": "VARCHAR(255) NOT NULL DEFAULT ''",
         "lease_epoch": "INTEGER NOT NULL DEFAULT 0",
-        "lease_expires_at": "TIMESTAMP NULL",
+        "lease_expires_at": (
+            "TIMESTAMP WITH TIME ZONE NULL"
+            if engine.dialect.name == "postgresql"
+            else "TIMESTAMP NULL"
+        ),
     }
     with engine.begin() as connection:
         for name, definition in missing.items():
