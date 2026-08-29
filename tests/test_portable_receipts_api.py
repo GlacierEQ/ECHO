@@ -82,6 +82,20 @@ def test_envelope_idempotency_mismatch_is_rejected(client):
     assert "idempotency" in response.json()["detail"]
 
 
+def test_envelope_capability_mismatch_is_rejected(client):
+    envelope = make_envelope()
+    response = client.post(
+        "/jobs",
+        json={
+            "job_type": "echo.summarize",
+            "idempotency_key": envelope.idempotency_key,
+            "payload": {"__echo_work_envelope__": envelope.as_dict()},
+        },
+    )
+    assert response.status_code == 422
+    assert "capability" in response.json()["detail"]
+
+
 def test_unbound_job_has_no_portable_proof(client):
     response = client.post(
         "/jobs",
