@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol, Sequence
 
 from echo.execution_mesh import ExecutionMesh, ExecutionTask, WorkerBackend, WorkerResult
-from echo.work_envelope import ExecutionReceipt, WorkEnvelope
+from echo.work_envelope import ExecutionReceipt, ReceiptChain, WorkEnvelope
 
 ENVELOPE_PAYLOAD_KEY = "__echo_work_envelope__"
 
@@ -120,6 +120,51 @@ def receipt_from_mesh(
         previous_receipt_hash=previous_receipt_hash,
         details=receipt_details,
     )
+
+
+def receipts_from_durable_records(
+    envelope: WorkEnvelope,
+    records: Sequence[Any],
+    *,
+    job_id: str,
+    verification_method: str = "echo-durable-receipt-readback",
+) -> ReceiptChain:
+    """Project ECHO's persisted receipt rows into the portable receipt chain."""
+    chain = ReceiptChain(envelope)
+    previous_attempt = 0
+    for record in records:
+        if getattr(record, "job_id", "") != job_id:
+            raise ValueError("durable receipt belongs to a different job")
+        attempt = int(record.attempt)
+        if attempt <= previous_attempt:
+            raise ValueError("durable receipt attempts must be strictly increasing")
+        outcome = str(record.outcome)
+        status = {
+            "success": "succeeded",
+            "failure": "failed",
+            "retry": "failed",
+            "blocked": "blocked",
+        }.get(outcome, "failed")
+        stored_details = dict(record.details or {})
+        receipt_details = {
+            "durable_job_id": job_id,
+            "durable_attempt": attempt,
+            "durable_outcome": outcome,
+            "durable_receipt_hash": str(record.content_hash),
+            "durable_previous_hash": str(record.previous_hash or ""),
+            "stored_details": stored_details,
+        }
+        created_at = record.created_at.isoformat()
+        chain.append(
+            status=status,
+            output=stored_details,
+            verified=True,
+            verification_method=verification_method,
+            created_at=created_at,
+            details=receipt_details,
+        )
+        previous_attempt = attempt
+    return chain
 
 
 class DurableMeshStore(Protocol):
