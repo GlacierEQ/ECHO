@@ -6,6 +6,8 @@ DECISION="${ARTIFACT_DIR}/echo-innovation-decision.json"
 RECEIPT="${ARTIFACT_DIR}/echo-innovation-decision.receipt.json"
 mkdir -p "${ARTIFACT_DIR}"
 
+python -m pip install --disable-pip-version-check "ruff>=0.7,<1"
+
 python -m compileall -q echo tests scripts
 ruff check --select F echo tests scripts
 pytest tests/ -q --disable-warnings --maxfail=1 | tee "${ARTIFACT_DIR}/pytest.txt"
