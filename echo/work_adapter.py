@@ -1,7 +1,6 @@
 """Bridge WorkEnvelope contracts into ECHO mesh and durable receipts."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
 from echo.execution_mesh import ExecutionMesh, ExecutionTask, WorkerBackend, WorkerResult
