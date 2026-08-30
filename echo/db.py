@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -119,6 +119,30 @@ def get_engine(db_path: Path | str | None = None) -> Engine:
     )
 
 
+def _ensure_job_lease_columns(engine: Engine) -> None:
+    """Add lease columns when upgrading an existing pre-lease database."""
+    columns = {
+        item["name"] for item in inspect(engine).get_columns("orchestration_jobs")
+    }
+    missing = {
+        "lease_owner": "VARCHAR(255) NOT NULL DEFAULT ''",
+        "lease_epoch": "INTEGER NOT NULL DEFAULT 0",
+        "lease_expires_at": (
+            "TIMESTAMP WITH TIME ZONE NULL"
+            if engine.dialect.name == "postgresql"
+            else "TIMESTAMP NULL"
+        ),
+    }
+    with engine.begin() as connection:
+        for name, definition in missing.items():
+            if name not in columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE orchestration_jobs ADD COLUMN {name} {definition}"
+                    )
+                )
+
+
 def init_db(db_path: Path | str | None = None) -> Engine:
     engine = get_engine(db_path)
     if engine.dialect.name == "postgresql":
@@ -126,6 +150,7 @@ def init_db(db_path: Path | str | None = None) -> Engine:
         with engine.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
     Base.metadata.create_all(engine)
+    _ensure_job_lease_columns(engine)
     return engine
 
 

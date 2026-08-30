@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.engine import Engine
 
@@ -24,7 +24,7 @@ from echo.security import (
     get_auth_settings,
     provenance,
 )
-from echo.service import ContinuityService
+from echo.service import ContinuityService, JobLeaseConflictError
 from echo.trust import trust_loop_report
 
 ENGINE: Engine | None = None
@@ -215,22 +215,62 @@ def enqueue_job(body: JobIn, auth: AuthExecute):
             raise HTTPException(422, str(exc)) from exc
 
 
-def _execute_job(job_id: str):
+def _execute_job(job_id: str, worker_id: str = "direct"):
     with get_session(ENGINE) as session:
         try:
-            return ContinuityService(session).run_job(job_id)
+            return ContinuityService(session).run_job(job_id, worker_id=worker_id)
+        except JobLeaseConflictError as exc:
+            raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/jobs/{job_id}/run")
-def run_job(job_id: str, _auth: AuthExecute):
-    return _execute_job(job_id)
+def run_job(
+    job_id: str,
+    _auth: AuthExecute,
+    worker_id: str = Header("direct", alias="X-ECHO-Worker-ID"),
+):
+    return _execute_job(job_id, worker_id=worker_id)
 
 
 @app.post("/jobs/{job_id}/execute")
-def execute_job_compat(job_id: str, _auth: AuthExecute):
-    return _execute_job(job_id)
+def execute_job_compat(
+    job_id: str,
+    _auth: AuthExecute,
+    worker_id: str = Header("direct", alias="X-ECHO-Worker-ID"),
+):
+    return _execute_job(job_id, worker_id=worker_id)
+
+
+@app.post("/jobs/{job_id}/claim")
+def claim_job(
+    job_id: str,
+    _auth: AuthExecute,
+    worker_id: str = Header(..., alias="X-ECHO-Worker-ID"),
+):
+    with get_session(ENGINE) as session:
+        try:
+            return ContinuityService(session).claim_job(job_id, worker_id)
+        except JobLeaseConflictError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/jobs/{job_id}/heartbeat")
+def heartbeat_job(
+    job_id: str,
+    _auth: AuthExecute,
+    worker_id: str = Header(..., alias="X-ECHO-Worker-ID"),
+):
+    with get_session(ENGINE) as session:
+        try:
+            return ContinuityService(session).heartbeat_job(job_id, worker_id)
+        except JobLeaseConflictError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
 
 @app.get("/jobs/{job_id}")

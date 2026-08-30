@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from echo.models import (
@@ -28,6 +29,11 @@ from echo.work_adapter import ENVELOPE_PAYLOAD_KEY, receipts_from_durable_record
 from echo.work_envelope import WorkEnvelope
 
 SUPPORTED_JOBS = {"echo.ping", "echo.summarize", "echo.integrity.verify"}
+DEFAULT_LEASE_SECONDS = 300.0
+
+
+class JobLeaseConflictError(ValueError):
+    """Raised when a worker cannot acquire or renew a live job lease."""
 
 
 class ContinuityService:
@@ -218,33 +224,229 @@ class ContinuityService:
         self.session.flush()
         return self._job_out(job)
 
-    def run_job(self, job_id: str) -> JobOut:
+    @staticmethod
+    def _aware(value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    @classmethod
+    def _lease_live(cls, job: JobORM, now: datetime) -> bool:
+        return bool(
+            job.status == "running"
+            and job.lease_expires_at is not None
+            and cls._aware(job.lease_expires_at) > now
+        )
+
+    def recover_stale_jobs(self, now: datetime | None = None) -> list[str]:
+        """Release expired jobs and record the recovery before another claim."""
+        now = self._aware(now or utcnow())
+        rows = list(
+            self.session.scalars(
+                select(JobORM).where(
+                    JobORM.status == "running",
+                    JobORM.lease_expires_at.is_not(None),
+                    JobORM.lease_expires_at <= now,
+                )
+            ).all()
+        )
+        recovered: list[str] = []
+        for candidate in rows:
+            prior_owner = candidate.lease_owner
+            result = self.session.execute(
+                update(JobORM)
+                .execution_options(synchronize_session=False)
+                .where(
+                    JobORM.id == candidate.id,
+                    JobORM.status == "running",
+                    JobORM.lease_epoch == candidate.lease_epoch,
+                    JobORM.lease_expires_at <= now,
+                )
+                .values(
+                    status=(
+                        "failed"
+                        if candidate.attempts >= candidate.max_attempts
+                        else "retrying"
+                    ),
+                    lease_owner="",
+                    lease_expires_at=None,
+                    lease_epoch=candidate.lease_epoch + 1,
+                    last_error="expired lease recovered",
+                    finished_at=(
+                        now if candidate.attempts >= candidate.max_attempts else None
+                    ),
+                )
+            )
+            if result.rowcount != 1:
+                continue
+            candidate.status = (
+                "failed" if candidate.attempts >= candidate.max_attempts else "retrying"
+            )
+            candidate.lease_owner = ""
+            candidate.lease_expires_at = None
+            candidate.lease_epoch += 1
+            candidate.last_error = "expired lease recovered"
+            candidate.finished_at = (
+                now if candidate.attempts >= candidate.max_attempts else None
+            )
+            self._write_receipt(
+                candidate,
+                "lease_expired",
+                {"reason": "expired lease recovered", "worker": prior_owner},
+                action="lease_recovery",
+            )
+            recovered.append(candidate.id)
+        self.session.flush()
+        return recovered
+
+    def claim_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: float = DEFAULT_LEASE_SECONDS,
+        now: datetime | None = None,
+    ) -> JobOut:
+        """Atomically claim a pending/retrying job with a fencing epoch."""
+        worker_id = worker_id.strip()
+        if not worker_id:
+            raise ValueError("worker_id is required")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now = self._aware(now or utcnow())
+        self.recover_stale_jobs(now=now)
         job = self.session.get(JobORM, job_id)
         if not job:
             raise ValueError(f"job {job_id} not found")
-        if job.status == "succeeded":
+        if job.status in {"succeeded", "failed"}:
             return self._job_out(job)
+        if job.status == "running":
+            if job.lease_owner == worker_id and self._lease_live(job, now):
+                return self._job_out(job)
+            raise JobLeaseConflictError("job has a live lease owned by another worker")
+        if job.status not in {"pending", "retrying"}:
+            raise JobLeaseConflictError(f"job is not claimable in state {job.status}")
         if job.attempts >= job.max_attempts:
             job.status = "failed"
             job.last_error = "max attempts exceeded"
-            job.finished_at = utcnow()
+            job.finished_at = now
             self._write_receipt(job, "failure", {"reason": "max_attempts"})
             self.session.flush()
             return self._job_out(job)
-        job.status = "running"
-        job.attempts += 1
-        self.session.flush()
+        expires = now + timedelta(seconds=lease_seconds)
+        result = self.session.execute(
+            update(JobORM)
+            .execution_options(synchronize_session=False)
+            .where(
+                JobORM.id == job.id,
+                JobORM.status == job.status,
+                JobORM.attempts == job.attempts,
+                JobORM.lease_epoch == job.lease_epoch,
+            )
+            .values(
+                status="running",
+                attempts=job.attempts + 1,
+                lease_owner=worker_id,
+                lease_expires_at=expires,
+                lease_epoch=job.lease_epoch + 1,
+                last_error="",
+            )
+        )
+        if result.rowcount != 1:
+            raise JobLeaseConflictError("job claim lost a concurrent race")
+        self.session.refresh(job)
+        return self._job_out(job)
+
+    def heartbeat_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: float = DEFAULT_LEASE_SECONDS,
+        now: datetime | None = None,
+    ) -> JobOut:
+        """Extend a live lease without changing its fencing epoch."""
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now = self._aware(now or utcnow())
+        job = self.session.get(JobORM, job_id)
+        if not job:
+            raise ValueError(f"job {job_id} not found")
+        if job.lease_owner != worker_id or not self._lease_live(job, now):
+            raise JobLeaseConflictError("lease is stale or owned by another worker")
+        expires = now + timedelta(seconds=lease_seconds)
+        result = self.session.execute(
+            update(JobORM)
+            .execution_options(synchronize_session=False)
+            .where(
+                JobORM.id == job.id,
+                JobORM.status == "running",
+                JobORM.lease_owner == worker_id,
+                JobORM.lease_epoch == job.lease_epoch,
+                JobORM.lease_expires_at > now,
+            )
+            .values(lease_expires_at=expires)
+        )
+        if result.rowcount != 1:
+            raise JobLeaseConflictError("lease heartbeat lost a concurrent race")
+        self.session.refresh(job)
+        return self._job_out(job)
+
+    def run_job(self, job_id: str, worker_id: str = "direct") -> JobOut:
+        job_state = self.claim_job(job_id, worker_id)
+        if job_state.status in {"succeeded", "failed"}:
+            return job_state
+        job = self.session.get(JobORM, job_id)
+        assert job is not None
         try:
             result = self._dispatch(job)
-            job.status = "succeeded"
-            job.receipt = result
-            job.finished_at = utcnow()
+            commit_now = self._aware(utcnow())
+            update_result = self.session.execute(
+                update(JobORM)
+                .execution_options(synchronize_session=False)
+                .where(
+                    JobORM.id == job.id,
+                    JobORM.status == "running",
+                    JobORM.lease_owner == worker_id,
+                    JobORM.lease_epoch == job.lease_epoch,
+                    JobORM.lease_expires_at > commit_now,
+                )
+                .values(
+                    status="succeeded",
+                    receipt=result,
+                    finished_at=commit_now,
+                    lease_owner="",
+                    lease_expires_at=None,
+                )
+            )
+            if update_result.rowcount != 1:
+                raise JobLeaseConflictError("lease fence rejected result commit")
+            self.session.refresh(job)
             self._write_receipt(job, "success", result)
+        except JobLeaseConflictError:
+            raise
         except Exception as exc:
-            job.status = "retrying" if job.attempts < job.max_attempts else "failed"
-            job.last_error = str(exc)
-            if job.status == "failed":
-                job.finished_at = utcnow()
+            commit_now = self._aware(utcnow())
+            next_status = "retrying" if job.attempts < job.max_attempts else "failed"
+            update_result = self.session.execute(
+                update(JobORM)
+                .execution_options(synchronize_session=False)
+                .where(
+                    JobORM.id == job.id,
+                    JobORM.status == "running",
+                    JobORM.lease_owner == worker_id,
+                    JobORM.lease_epoch == job.lease_epoch,
+                    JobORM.lease_expires_at > commit_now,
+                )
+                .values(
+                    status=next_status,
+                    last_error=str(exc),
+                    finished_at=commit_now if next_status == "failed" else None,
+                    lease_owner="",
+                    lease_expires_at=None,
+                )
+            )
+            if update_result.rowcount != 1:
+                raise JobLeaseConflictError(
+                    "lease fence rejected failure commit"
+                ) from exc
+            self.session.refresh(job)
             self._write_receipt(job, "failure", {"error": str(exc)})
         self.session.flush()
         return self._job_out(job)
@@ -264,7 +466,11 @@ class ContinuityService:
         raise ValueError(f"unsupported capability: {job.job_type}")
 
     def _write_receipt(
-        self, job: JobORM, outcome: str, details: dict[str, Any]
+        self,
+        job: JobORM,
+        outcome: str,
+        details: dict[str, Any],
+        action: str = "execute",
     ) -> None:
         previous = self.session.scalar(
             select(ReceiptORM)
@@ -285,7 +491,7 @@ class ContinuityService:
                 id=stable_uuid(f"echo:receipt:{job.id}:{job.attempts}"),
                 job_id=job.id,
                 attempt=job.attempts,
-                action="execute",
+                action=action,
                 outcome=outcome,
                 details=details,
                 previous_hash=previous_hash,
@@ -431,6 +637,12 @@ class ContinuityService:
             receipt=job.receipt or {},
             authority_actor=job.authority_actor or "",
             authority_scope=job.authority_scope or "",
+            lease_epoch=job.lease_epoch,
+            lease_expires_at=(
+                ContinuityService._aware(job.lease_expires_at)
+                if job.lease_expires_at is not None
+                else None
+            ),
             created_at=job.created_at,
             updated_at=job.updated_at,
             finished_at=job.finished_at,
