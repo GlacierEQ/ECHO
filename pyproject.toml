@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0"]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "pytest-cov>=6.0.0", "ruff>=0.7.0"]
 
 [project.scripts]
 echo = "echo.cli:main"
@@ -34,3 +34,12 @@ include = ["echo*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["echo"]
+
+[tool.coverage.report]
+# Coverage is enforced locally by coverage.py, not by any external service.
+# Codecov was removed (eradication decision 2026-10-25); CI fails below this.
+fail_under = 80
+show_missing = true

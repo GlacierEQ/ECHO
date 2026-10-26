@@ -32,6 +32,6 @@ jobs:
       - name: Dependency audit
         run: pip-audit -r requirements.txt --progress-spinner off
       - name: Behavioral tests
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short --cov=echo --cov-report=term-missing
       - name: CLI verify
         run: python -m echo.cli verify
