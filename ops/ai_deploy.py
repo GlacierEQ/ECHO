@@ -208,8 +208,6 @@ def load_spec(root: Path, args: argparse.Namespace) -> Spec:
     raw: dict[str, Any] | None = None
     if args.spec:
         raw = json.loads(Path(args.spec).read_text(encoding="utf-8"))
-    elif os.environ.get("DEPLOY_SPEC_JSON"):
-        raw = json.loads(os.environ["DEPLOY_SPEC_JSON"])
     elif (root / "deploy.spec.json").exists():
         raw = json.loads((root / "deploy.spec.json").read_text(encoding="utf-8"))
 
@@ -218,6 +216,11 @@ def load_spec(root: Path, args: argparse.Namespace) -> Spec:
 
     if not raw:
         if os.environ.get("DEPLOY_COMMAND"):
+            if os.environ.get("DEPLOY_COMMAND_SOURCE") != "repo-secret":
+                raise ValueError(
+                    "DEPLOY_COMMAND refused: commands must come from the repository "
+                    "spec file or a host-set secret (DEPLOY_COMMAND_SOURCE=repo-secret)"
+                )
             base.deploy = [os.environ["DEPLOY_COMMAND"]]
         if os.environ.get("ROLLBACK_COMMAND"):
             base.rollback = [os.environ["ROLLBACK_COMMAND"]]

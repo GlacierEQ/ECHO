@@ -1,24 +1,19 @@
 name: AI Autonomous Deploy
 
-# No environment approval. No click-to-continue.
-# Triggers: push to main, workflow_call, repository_dispatch (AI-issued).
+# Environment approval required (GitHub environment: production).
+# Triggers: push to main only. No remote dispatch. Deploy commands come from
+# the repository spec file or a host-set secret, never from a caller payload.
 
 on:
   push:
     branches: [main]
   workflow_call:
     inputs:
-      deploy_spec_json:
-        description: "Optional inline deploy specification JSON"
-        required: false
-        type: string
       root:
         description: "Repository root path"
         required: false
         type: string
         default: "."
-  repository_dispatch:
-    types: [ai-deploy]
 
 permissions:
   contents: read
@@ -29,6 +24,7 @@ concurrency:
 
 jobs:
   deploy:
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -46,10 +42,6 @@ jobs:
         id: spec
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_SPEC: ${{ inputs.deploy_spec_json || github.event.client_payload.deploy_spec_json || '' }}
-          PAYLOAD_DEPLOY: ${{ github.event.client_payload.deploy_command || '' }}
-          PAYLOAD_ROLLBACK: ${{ github.event.client_payload.rollback_command || '' }}
-          PAYLOAD_HEALTH: ${{ github.event.client_payload.health_url || '' }}
           SECRET_DEPLOY: ${{ secrets.DEPLOY_COMMAND || '' }}
         run: |
           set -euo pipefail
@@ -62,20 +54,6 @@ jobs:
             echo "Refusing to treat an ephemeral runner-local container as a production deployment."
             exit 78
           fi
-          if [ -n "${INPUT_SPEC}" ]; then
-            echo "DEPLOY_SPEC_JSON<<EOF" >> "$GITHUB_ENV"
-            echo "${INPUT_SPEC}" >> "$GITHUB_ENV"
-            echo "EOF" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${PAYLOAD_DEPLOY}" ]; then
-            echo "DEPLOY_COMMAND=${PAYLOAD_DEPLOY}" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${PAYLOAD_ROLLBACK}" ]; then
-            echo "ROLLBACK_COMMAND=${PAYLOAD_ROLLBACK}" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${PAYLOAD_HEALTH}" ]; then
-            echo "HEALTH_URL=${PAYLOAD_HEALTH}" >> "$GITHUB_ENV"
-          fi
           if [ -z "${HEALTH_URL:-}" ] && [ -n "${{ vars.ECHO_BASE_URL }}" ]; then
             echo "HEALTH_URL=${{ vars.ECHO_BASE_URL }}/health" >> "$GITHUB_ENV"
           fi
@@ -86,8 +64,9 @@ jobs:
       - name: Run autonomous deploy runner
         id: deploy
         env:
-          DEPLOY_COMMAND: ${{ env.DEPLOY_COMMAND || secrets.DEPLOY_COMMAND || '' }}
-          ROLLBACK_COMMAND: ${{ env.ROLLBACK_COMMAND || secrets.ROLLBACK_COMMAND || '' }}
+          DEPLOY_COMMAND: ${{ secrets.DEPLOY_COMMAND || '' }}
+          DEPLOY_COMMAND_SOURCE: repo-secret
+          ROLLBACK_COMMAND: ${{ secrets.ROLLBACK_COMMAND || '' }}
           HEALTH_URL: ${{ env.HEALTH_URL || '' }}
           DEPLOY_SPEC_JSON: ${{ env.DEPLOY_SPEC_JSON || '' }}
         run: |
