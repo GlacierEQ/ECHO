@@ -23,6 +23,23 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+try:  # `python -m ops.ai_deploy` from the repo root
+    from ops.approval import (
+        ApprovalVerifier,
+        build_expected_request,
+        config_fingerprint,
+        resolve_spec_path,
+        spec_project_type,
+    )
+except ImportError:  # `python ops/ai_deploy.py`: ops/ is on sys.path
+    from approval import (
+        ApprovalVerifier,
+        build_expected_request,
+        config_fingerprint,
+        resolve_spec_path,
+        spec_project_type,
+    )
+
 VERSION = "1.0.0"
 RESULT_FILE = "deployment-result.json"
 LOCK_FILE = ".ai-deploy.lock"
@@ -204,6 +221,72 @@ def default_pipeline(project_type: str) -> Pipeline:
     return Pipeline()
 
 
+def host_command(name: str, marker_env: str) -> str | None:
+    """Return an env-supplied command only with its host-set source marker.
+
+    ``DEPLOY_COMMAND`` is honored only if ``DEPLOY_COMMAND_SOURCE ==
+    "repo-secret"``; ``ROLLBACK_COMMAND`` only if ``ROLLBACK_COMMAND_SOURCE
+    == "repo-secret"``. Anything else is refused with a named reason —
+    an env var is never a command on its own. No other env var may ever
+    become a command.
+    """
+    cmd = os.environ.get(name)
+    if not cmd:
+        return None
+    if os.environ.get(marker_env) != "repo-secret":
+        raise ValueError(
+            f"{name} refused: commands must come from the repository "
+            f"spec file or a host-set secret ({marker_env}=repo-secret)"
+        )
+    return cmd
+
+
+def deploy_config_sha(root: Path, spec_path: str | None) -> str:
+    """The config fingerprint the approval token must bind, computed exactly
+    as the mint CLI computes it (same spec resolution, same function)."""
+    resolved = resolve_spec_path(root, spec_path)
+    project_type = spec_project_type(root, spec_path)
+    return config_fingerprint(root, resolved, project_type)
+
+
+def verify_deploy_approval(
+    root: Path, spec_path: str | None, now: datetime | None = None
+) -> dict[str, Any]:
+    """Approval gate: verify the signed, exact-bound deploy token from the
+    environment before anything executes.
+
+    Reads ``DEPLOY_APPROVAL_TOKEN`` (JSON) and ``DEPLOY_APPROVAL_SECRET``
+    (env only). Missing token or secret, a short secret, a bad signature, a
+    binding mismatch against this checkout's config fingerprint, an expired
+    token, or a replayed nonce all raise ValueError with a named reason.
+    No human-click environment gate: the signed token IS the authorization.
+    """
+    token_raw = os.environ.get("DEPLOY_APPROVAL_TOKEN")
+    if not token_raw:
+        raise ValueError("DEPLOY_APPROVAL token missing")
+    secret = os.environ.get("DEPLOY_APPROVAL_SECRET")
+    if not secret:
+        raise ValueError("DEPLOY_APPROVAL secret missing")
+    try:
+        token = json.loads(token_raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"DEPLOY_APPROVAL token malformed: {exc}") from exc
+    if not isinstance(token, dict):
+        raise ValueError(
+            "DEPLOY_APPROVAL token malformed: token must be a JSON object"
+        )
+    verifier = ApprovalVerifier(secret)  # ValueError if the secret is too short
+    config_sha = deploy_config_sha(root, spec_path)
+    request = token.get("request") if isinstance(token.get("request"), dict) else {}
+    expected = build_expected_request(
+        config_sha=config_sha,
+        expires_at=request.get("expires_at"),
+        nonce=request.get("nonce"),
+    )
+    verifier.verify(token, expected, now=now)
+    return token
+
+
 def load_spec(root: Path, args: argparse.Namespace) -> Spec:
     raw: dict[str, Any] | None = None
     if args.spec:
@@ -215,15 +298,12 @@ def load_spec(root: Path, args: argparse.Namespace) -> Spec:
     base = default_pipeline(project_type)
 
     if not raw:
-        if os.environ.get("DEPLOY_COMMAND"):
-            if os.environ.get("DEPLOY_COMMAND_SOURCE") != "repo-secret":
-                raise ValueError(
-                    "DEPLOY_COMMAND refused: commands must come from the repository "
-                    "spec file or a host-set secret (DEPLOY_COMMAND_SOURCE=repo-secret)"
-                )
-            base.deploy = [os.environ["DEPLOY_COMMAND"]]
-        if os.environ.get("ROLLBACK_COMMAND"):
-            base.rollback = [os.environ["ROLLBACK_COMMAND"]]
+        deploy_cmd = host_command("DEPLOY_COMMAND", "DEPLOY_COMMAND_SOURCE")
+        if deploy_cmd:
+            base.deploy = [deploy_cmd]
+        rollback_cmd = host_command("ROLLBACK_COMMAND", "ROLLBACK_COMMAND_SOURCE")
+        if rollback_cmd:
+            base.rollback = [rollback_cmd]
         health: list[HealthCheck] = []
         if os.environ.get("HEALTH_URL"):
             health.append(HealthCheck(url=os.environ["HEALTH_URL"]))
@@ -232,26 +312,31 @@ def load_spec(root: Path, args: argparse.Namespace) -> Spec:
     p = raw.get("pipeline")
     if p is None:
         pipeline = base
-        if os.environ.get("DEPLOY_COMMAND"):
-            pipeline.deploy = [os.environ["DEPLOY_COMMAND"]]
-        if os.environ.get("ROLLBACK_COMMAND"):
-            pipeline.rollback = [os.environ["ROLLBACK_COMMAND"]]
+        deploy_cmd = host_command("DEPLOY_COMMAND", "DEPLOY_COMMAND_SOURCE")
+        if deploy_cmd:
+            pipeline.deploy = [deploy_cmd]
+        rollback_cmd = host_command("ROLLBACK_COMMAND", "ROLLBACK_COMMAND_SOURCE")
+        if rollback_cmd:
+            pipeline.rollback = [rollback_cmd]
     else:
 
-        def phase(name: str, env_key: str | None = None) -> list[str]:
+        def phase(
+            name: str, env_key: str | None = None, marker_env: str | None = None
+        ) -> list[str]:
             if name in p:
                 return list(p.get(name) or [])
-            if env_key and os.environ.get(env_key):
-                return [os.environ[env_key]]
+            if env_key and marker_env:
+                cmd = host_command(env_key, marker_env)
+                return [cmd] if cmd else []
             return []
 
         pipeline = Pipeline(
             prepare=phase("prepare"),
             test=phase("test"),
             build=phase("build"),
-            deploy=phase("deploy", "DEPLOY_COMMAND"),
+            deploy=phase("deploy", "DEPLOY_COMMAND", "DEPLOY_COMMAND_SOURCE"),
             verify=phase("verify"),
-            rollback=phase("rollback", "ROLLBACK_COMMAND"),
+            rollback=phase("rollback", "ROLLBACK_COMMAND", "ROLLBACK_COMMAND_SOURCE"),
         )
     health = []
     for h in raw.get("health") or []:
@@ -522,16 +607,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 78
 
-    try:
-        spec = load_spec(root, args)
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        print(
-            json.dumps({"status": "CONFIG_ERROR", "error": f"invalid spec: {exc}"}),
-            file=sys.stderr,
-        )
-        return 78
-
+    # --print-spec stays token-free: it only reads and prints the resolved
+    # spec and executes nothing, so it runs before the approval gate.
     if args.print_spec:
+        try:
+            spec = load_spec(root, args)
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            print(
+                json.dumps({"status": "CONFIG_ERROR", "error": f"invalid spec: {exc}"}),
+                file=sys.stderr,
+            )
+            return 78
         print(
             json.dumps(
                 {
@@ -545,6 +631,27 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+
+    # Approval gate FIRST, before load_spec executes anything and before
+    # execute() runs any command. Any failure -> CONFIG_ERROR exit 78,
+    # no commands run.
+    try:
+        verify_deploy_approval(root, args.spec)
+    except ValueError as exc:
+        print(
+            json.dumps({"status": "CONFIG_ERROR", "error": str(exc)}),
+            file=sys.stderr,
+        )
+        return 78
+
+    try:
+        spec = load_spec(root, args)
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        print(
+            json.dumps({"status": "CONFIG_ERROR", "error": f"invalid spec: {exc}"}),
+            file=sys.stderr,
+        )
+        return 78
 
     if (
         not phase_commands(spec, "deploy")

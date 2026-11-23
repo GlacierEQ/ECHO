@@ -1,8 +1,9 @@
 name: AI Autonomous Deploy
 
-# Environment approval required (GitHub environment: production).
-# Triggers: push to main only. No remote dispatch. Deploy commands come from
-# the repository spec file or a host-set secret, never from a caller payload.
+# No human gate: no environment approval, no click-to-continue.
+# Authorization is a signed, exact-bound, expiring approval token verified by
+# the runner (APEX ApprovalVerifier pattern). Deploy commands come only from
+# the repository spec file or a host-set secret, never from caller input.
 
 on:
   push:
@@ -24,7 +25,6 @@ concurrency:
 
 jobs:
   deploy:
-    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -43,14 +43,14 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           SECRET_DEPLOY: ${{ secrets.DEPLOY_COMMAND || '' }}
+          SECRET_TOKEN: ${{ secrets.DEPLOY_APPROVAL_TOKEN || '' }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "push" ] \
-            && [ -z "${INPUT_SPEC}" ] \
-            && [ -z "${PAYLOAD_DEPLOY}" ] \
+            && [ ! -f deploy.spec.json ] \
             && [ -z "${SECRET_DEPLOY}" ] \
-            && [ ! -f deploy.spec.json ]; then
-            echo "::error::No external deployment specification or DEPLOY_COMMAND is configured for a main push."
+            && [ -z "${SECRET_TOKEN}" ]; then
+            echo "::error::No deployment authorization configured for a main push: no deploy.spec.json, no DEPLOY_COMMAND secret, and no DEPLOY_APPROVAL_TOKEN secret."
             echo "Refusing to treat an ephemeral runner-local container as a production deployment."
             exit 78
           fi
@@ -64,11 +64,13 @@ jobs:
       - name: Run autonomous deploy runner
         id: deploy
         env:
+          DEPLOY_APPROVAL_TOKEN: ${{ secrets.DEPLOY_APPROVAL_TOKEN || '' }}
+          DEPLOY_APPROVAL_SECRET: ${{ secrets.DEPLOY_APPROVAL_SECRET || '' }}
           DEPLOY_COMMAND: ${{ secrets.DEPLOY_COMMAND || '' }}
           DEPLOY_COMMAND_SOURCE: repo-secret
           ROLLBACK_COMMAND: ${{ secrets.ROLLBACK_COMMAND || '' }}
+          ROLLBACK_COMMAND_SOURCE: repo-secret
           HEALTH_URL: ${{ env.HEALTH_URL || '' }}
-          DEPLOY_SPEC_JSON: ${{ env.DEPLOY_SPEC_JSON || '' }}
         run: |
           set -euo pipefail
           ROOT="${{ inputs.root || '.' }}"
